@@ -1,0 +1,51 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "TdDx Store",
+  "version": "0.0.1",
+  "identifier": "io.userfrm.tddx-store",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "TdDx Store",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 600,
+        "resizable": true,
+        "decorations": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https://thetadata.net https://www.thetadata.net; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "shortDescription": "Dataset store + downloader for ThetaData",
+    "longDescription": "TdDx Store is the queue-driven dataset downloader for ThetaData. Browse a curated catalogue of stock + option datasets (trades, NBBO quotes, OHLC, EOD, greeks, open interest), queue downloads, watch live progress, persist to parquet/csv/jsonl. Cross-platform desktop app + companion CLI.",
+    "category": "Finance",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "plugins": {
+    "updater": {
+      "active": false,
+      "endpoints": [
+        "https://github.com/userFRM/tddx-store/releases/latest/download/latest.json"
+      ],
+      "pubkey": ""
+    }
+  }
+}

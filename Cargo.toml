@@ -1,0 +1,50 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tdds-core",
+    "crates/tdds-cli",
+    "apps/desktop/src-tauri",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["userFRM"]
+repository = "https://github.com/userFRM/tddx-store"
+
+[workspace.dependencies]
+# Pinned to v10.0.0 — first stable major release of thetadatadx (streaming
+# SSOT, fluent contract-first API, FLATFILES SDK parity). tdbe 0.13.1
+# rides the same tag on the monorepo.
+thetadatadx = { git = "https://github.com/userFRM/ThetaDataDx", tag = "v10.0.0", features = ["arrow"] }
+tdbe = { git = "https://github.com/userFRM/ThetaDataDx", tag = "v10.0.0" }
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+clap = { version = "4", features = ["derive", "env"] }
+
+# Storage / formats
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "chrono"] }
+arrow-array = "58"
+arrow-schema = "58"
+arrow-csv = "58"
+arrow-json = "58"
+parquet = { version = "58", features = ["arrow", "zstd"] }
+
+# Misc
+rustls = { version = "0.23", features = ["ring"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+async-trait = "0.1"
+futures = "0.3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3

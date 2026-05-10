@@ -1,0 +1,131 @@
+/* ============================================================
+   TdDx Store Design Tokens
+   Generated from DESIGN.md YAML — do not hard-code values
+   in components. Reference var(--token-name) only.
+   ============================================================ */
+
+:root {
+  /* ── Colors ─────────────────────────────────────────────── */
+  --bg:             #0B0E14;
+  --surface-1:      #11151D;
+  --surface-2:      #161B25;
+  --surface-3:      #1E2430;
+  --border:         #222936;
+  --border-strong:  #2A3242;
+
+  --fg:             #E6EAF2;
+  --fg-muted:       #9AA3B2;
+  --fg-subtle:      #5C6577;
+
+  --accent:         #7C8CFF;
+  --accent-hi:      #9AA8FF;
+  --accent-lo:      #5868D9;
+  --accent-tint:    rgba(124, 140, 255, 0.12);
+
+  --good:           #5DD4A0;
+  --warn:           #F5C56F;
+  --bad:            #FF7E7E;
+  --data-bull:      #34D399;
+  --data-bear:      #F87171;
+
+  /* ── Typography ─────────────────────────────────────────── */
+  --font-ui:        "Inter", system-ui, -apple-system, sans-serif;
+  --font-display:   "Inter Display", "Inter", system-ui, sans-serif;
+  --font-mono:      "JetBrains Mono", "SF Mono", Consolas, ui-monospace, monospace;
+
+  --text-display-xl:    2.5rem;
+  --text-display-lg:    1.75rem;
+  --text-heading:       1rem;
+  --text-body:          0.875rem;
+  --text-body-sm:       0.8125rem;
+  --text-caption:       0.6875rem;
+  --text-mono:          0.8125rem;
+
+  --weight-normal:  400;
+  --weight-medium:  500;
+  --weight-semi:    600;
+
+  /* ── Spacing ─────────────────────────────────────────────── */
+  --sp-1:  4px;
+  --sp-2:  8px;
+  --sp-3:  12px;
+  --sp-4:  16px;
+  --sp-5:  20px;
+  --sp-6:  24px;
+  --sp-8:  32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+  --sp-16: 64px;
+
+  /* ── Radii ───────────────────────────────────────────────── */
+  --r-none: 0px;
+  --r-sm:   6px;
+  --r-md:   10px;
+  --r-lg:   14px;
+  --r-xl:   20px;
+  --r-pill: 999px;
+
+  /* ── Shadows ─────────────────────────────────────────────── */
+  --shadow-flat:         0 0 0 1px rgba(0,0,0,0.2);
+  --shadow-raised:       0 1px 2px rgba(0,0,0,0.4), 0 0 0 1px rgba(0,0,0,0.25);
+  --shadow-modal:        0 24px 64px rgba(0,0,0,0.55), 0 0 0 1px rgba(0,0,0,0.4);
+  --shadow-glow-accent:  0 0 0 4px rgba(124,140,255,0.18);
+
+  /* ── Motion ─────────────────────────────────────────────── */
+  --dur-instant: 60ms;
+  --dur-fast:    120ms;
+  --dur-base:    180ms;
+  --dur-slow:    260ms;
+
+  --ease-standard: cubic-bezier(0.2, 0.0, 0.0, 1.0);
+  --ease-decel:    cubic-bezier(0.0, 0.0, 0.2, 1.0);
+  --ease-accel:    cubic-bezier(0.4, 0.0, 1.0, 1.0);
+
+  /* ── Layout constants ────────────────────────────────────── */
+  --topbar-h:     48px;
+  --rail-w:       240px;
+  --rail-w-sm:    64px;
+
+  /* ── Icon ────────────────────────────────────────────────── */
+  --icon-sm:  14px;
+  --icon-md:  16px;
+  --icon-lg:  20px;
+  --icon-stroke: 1.75;
+}
+
+/* ============================================================
+   Light theme. Activated by `<html data-theme="light">`. The
+   accent stays identical so muscle memory transfers; greyscale
+   inverts and the data-bull/bear pair flips to printer-safe
+   variants. Surfaces step UP in lightness instead of down.
+   ============================================================ */
+:root[data-theme="light"] {
+  --bg:             #F6F7F9;
+  --surface-1:      #FFFFFF;
+  --surface-2:      #F2F3F6;
+  --surface-3:      #E9ECF1;
+  --border:         #DFE3EA;
+  --border-strong:  #C8CFD9;
+
+  --fg:             #14181F;
+  --fg-muted:       #586273;
+  --fg-subtle:      #8A92A1;
+
+  --accent:         #4253E2;
+  --accent-hi:      #5969F0;
+  --accent-lo:      #2F3FC9;
+  --accent-tint:    rgba(66, 83, 226, 0.1);
+
+  --good:           #1F9F66;
+  --warn:           #B07A0E;
+  --bad:            #C73E3E;
+  --data-bull:      #109A5C;
+  --data-bear:      #C72F3A;
+
+  --shadow-flat:         0 0 0 1px rgba(20, 24, 31, 0.06);
+  --shadow-raised:       0 1px 2px rgba(20, 24, 31, 0.08),
+                         0 0 0 1px rgba(20, 24, 31, 0.04);
+  --shadow-modal:        0 24px 64px rgba(20, 24, 31, 0.18),
+                         0 0 0 1px rgba(20, 24, 31, 0.06);
+  --shadow-glow-accent:  0 0 0 4px rgba(66, 83, 226, 0.16);
+}

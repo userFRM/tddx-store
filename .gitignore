@@ -1,0 +1,31 @@
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Node
+node_modules/
+.svelte-kit/
+build/
+dist/
+.vite/
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# IDE / OS
+.DS_Store
+.vscode/settings.json
+.idea/
+*.swp
+*~
+
+# Local env / secrets
+.env
+.env.local
+creds.txt
+*.creds
+queue.db
+queue.db-*
+tddl_data/

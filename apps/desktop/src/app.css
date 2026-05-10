@@ -1,0 +1,329 @@
+/* ============================================================
+   TdDx Store global styles
+   All values reference tokens from tokens.css.
+   ============================================================ */
+
+@import "$lib/styles/tokens.css";
+
+/* ── Reset & base ──────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: var(--text-body);
+  font-weight: var(--weight-normal);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#svelte { height: 100%; }
+
+/* ── Scrollbar ──────────────────────────────────────────────── */
+::-webkit-scrollbar          { width: 6px; height: 6px; }
+::-webkit-scrollbar-track    { background: transparent; }
+::-webkit-scrollbar-thumb    { background: var(--border-strong); border-radius: var(--r-pill); }
+::-webkit-scrollbar-thumb:hover { background: var(--fg-subtle); }
+::-webkit-scrollbar-corner   { background: transparent; }
+
+/* ── Typography utilities ───────────────────────────────────── */
+.text-display-xl {
+  font-family: var(--font-display);
+  font-size: var(--text-display-xl);
+  font-weight: var(--weight-semi);
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+.text-display-lg {
+  font-family: var(--font-display);
+  font-size: var(--text-display-lg);
+  font-weight: var(--weight-semi);
+  letter-spacing: -0.015em;
+  line-height: 1.15;
+}
+.text-heading {
+  font-size: var(--text-heading);
+  font-weight: var(--weight-semi);
+  letter-spacing: -0.005em;
+  line-height: 1.4;
+}
+.text-body    { font-size: var(--text-body);    line-height: 1.5; }
+.text-body-sm { font-size: var(--text-body-sm); line-height: 1.45; }
+.text-caption {
+  font-size: var(--text-caption);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.4;
+  color: var(--fg-muted);
+}
+.text-mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+}
+.tabnum {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+}
+
+/* ── Color utilities ────────────────────────────────────────── */
+.fg-muted   { color: var(--fg-muted); }
+.fg-subtle  { color: var(--fg-subtle); }
+.fg-accent  { color: var(--accent); }
+.fg-good    { color: var(--good); }
+.fg-warn    { color: var(--warn); }
+.fg-bad     { color: var(--bad); }
+
+/* ── Buttons ────────────────────────────────────────────────── */
+button { font-family: inherit; cursor: pointer; }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3);
+  height: 32px;
+  border-radius: var(--r-sm);
+  font-size: var(--text-body-sm);
+  font-weight: var(--weight-medium);
+  font-family: var(--font-ui);
+  border: none;
+  transition: background var(--dur-fast) var(--ease-standard),
+              color var(--dur-fast) var(--ease-standard),
+              box-shadow var(--dur-fast) var(--ease-standard);
+  white-space: nowrap;
+  outline: none;
+}
+.btn:focus-visible {
+  box-shadow: var(--shadow-glow-accent);
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+  font-weight: var(--weight-semi);
+}
+.btn-primary:hover  { background: var(--accent-hi); }
+.btn-primary:active { background: var(--accent-lo); }
+
+.btn-secondary {
+  background: var(--surface-2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+}
+.btn-secondary:hover  { background: var(--surface-3); border-color: var(--border-strong); }
+.btn-secondary:active { background: var(--border); }
+
+.btn-ghost {
+  background: transparent;
+  color: var(--fg-muted);
+  border: 1px solid transparent;
+}
+.btn-ghost:hover  { background: var(--surface-2); color: var(--fg); border-color: var(--border); }
+.btn-ghost:active { background: var(--surface-3); }
+
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  border: none;
+  transition: background var(--dur-fast) var(--ease-standard),
+              color var(--dur-fast) var(--ease-standard);
+  outline: none;
+  flex-shrink: 0;
+}
+.btn-icon:hover  { background: var(--surface-2); color: var(--fg); }
+.btn-icon:active { background: var(--surface-3); }
+.btn-icon:focus-visible { box-shadow: var(--shadow-glow-accent); }
+
+/* ── Form elements ──────────────────────────────────────────── */
+input, select, textarea {
+  font-family: var(--font-ui);
+  font-size: var(--text-body-sm);
+  color: var(--fg);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  outline: none;
+  transition: border-color var(--dur-fast) var(--ease-standard),
+              box-shadow var(--dur-fast) var(--ease-standard);
+}
+input:focus, select:focus, textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-tint);
+}
+input::placeholder { color: var(--fg-subtle); }
+
+.field-input {
+  height: 32px;
+  padding: 0 var(--sp-3);
+  width: 100%;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  font-size: var(--text-body-sm);
+  font-family: var(--font-ui);
+  outline: none;
+}
+.field-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-tint);
+}
+.field-input::placeholder { color: var(--fg-subtle); }
+
+/* ── Status pills ───────────────────────────────────────────── */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px var(--sp-2);
+  border-radius: var(--r-pill);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.pill-pending  { background: rgba(92, 101, 119, 0.18); color: var(--fg-muted); }
+.pill-running  { background: rgba(124, 140, 255, 0.18); color: var(--accent-hi); }
+.pill-done     { background: rgba(93, 212, 160, 0.15); color: var(--good); }
+.pill-failed   { background: rgba(255, 126, 126, 0.15); color: var(--bad); }
+.pill-empty    { background: rgba(245, 197, 111, 0.15); color: var(--warn); }
+
+.pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.pill-pending  .pill-dot { background: var(--fg-subtle); }
+.pill-running  .pill-dot { background: var(--accent); animation: pulse-dot 1.2s ease-in-out infinite; }
+.pill-done     .pill-dot { background: var(--good); }
+.pill-failed   .pill-dot { background: var(--bad); }
+.pill-empty    .pill-dot { background: var(--warn); }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
+}
+
+/* ── Focus ring ─────────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── Selection ──────────────────────────────────────────────── */
+::selection {
+  background: var(--accent-tint);
+  color: var(--fg);
+}
+
+/* ── Divider ────────────────────────────────────────────────── */
+.divider {
+  height: 1px;
+  background: var(--border);
+}
+
+/* ── Progress bar ───────────────────────────────────────────── */
+.progress-track {
+  height: 3px;
+  background: var(--surface-3);
+  border-radius: var(--r-pill);
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: var(--r-pill);
+  transition: width var(--dur-base) var(--ease-standard);
+}
+.progress-fill.running {
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-hi) 100%);
+}
+
+/* Indeterminate "in flight" stripe — animates a ~40% wide highlight
+   across the track. Honest about not knowing the real progress %, but
+   visually communicates "this row is still alive." */
+.progress-fill.indeterminate {
+  width: 40%;
+  background: linear-gradient(90deg,
+    var(--accent-tint) 0%,
+    var(--accent) 50%,
+    var(--accent-hi) 100%);
+  animation: indeterminate-slide 1.5s var(--ease-standard) infinite;
+}
+@keyframes indeterminate-slide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+
+/* Universal global keyframe (was duplicated in 5 components). */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 0.8s linear infinite; }
+
+/* Honor user's reduced-motion preference. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Disabled-button cursor (browser default varies in WebView). */
+button:disabled, .btn:disabled, .btn-icon:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* ── Markdown rendering for yaml-sourced description fields ─────
+   The ThetaData OpenAPI spec embeds markdown in `description` keys
+   (bold, italic, code, links, lists). We render via `marked` →
+   `{@html}` in components, then style here. Source is the upstream
+   yaml only, never user input. */
+.markdown-body { color: var(--fg-muted); font-size: var(--text-body-sm); line-height: 1.55; }
+.markdown-body p { margin: 0 0 0.5em; }
+.markdown-body p:last-child { margin-bottom: 0; }
+.markdown-body strong { color: var(--fg); font-weight: 600; }
+.markdown-body em { font-style: italic; }
+.markdown-body code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  padding: 0 4px;
+  background: var(--surface-2);
+  border-radius: 3px;
+}
+.markdown-body pre {
+  font-family: var(--font-mono);
+  background: var(--surface-2);
+  padding: 8px 10px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+.markdown-body a { color: var(--accent); text-decoration: underline; }
+.markdown-body ul, .markdown-body ol { margin: 0.25em 0 0.5em 1.25em; }
+.markdown-body li { margin: 0.15em 0; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3 {
+  font-size: 0.95em; font-weight: 600; color: var(--fg); margin: 0.5em 0 0.25em;
+}
+.markdown-inline { display: inline-block; }
+.markdown-inline p { display: inline; margin: 0; }

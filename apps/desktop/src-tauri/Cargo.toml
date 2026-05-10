@@ -1,0 +1,56 @@
+[package]
+name = "tdds-desktop"
+version = "0.0.1"
+description = "TdDx Store — queue-driven historical downloader for ThetaData"
+authors = ["userFRM"]
+edition = "2021"
+
+[lib]
+name = "tdds_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "tdds-desktop"
+path = "src/main.rs"
+
+[features]
+default = ["presets"]
+# `presets` pulls indexkit (S&P 500 / NDX / etc constituent lists). Optional
+# so the desktop app builds without network access to the indexkit repo.
+presets = ["dep:indexkit"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+toml = "0.8"
+
+[dependencies]
+tdds-core = { path = "../../../crates/tdds-core" }
+thetadatadx = { git = "https://github.com/userFRM/ThetaDataDx", tag = "v10.0.0", features = ["arrow"] }
+indexkit = { git = "https://github.com/userFRM/indexkit", branch = "main", optional = true }
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-stronghold = "2"
+tauri-plugin-notification = "2"
+# tauri-plugin-conduit pending: needs upstream npm publish + tauri 2.11 compat.
+# tauri-plugin-conduit = { git = "https://github.com/userFRM/tauri-conduit", branch = "master" }
+sha2 = "0.10"
+hex = "0.4"
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+tauri-plugin-clipboard-manager = "2.3.2"
+tauri-plugin-store = "2.4.3"
+tauri-plugin-window-state = "2.4.1"
+tauri-plugin-process = "2.3.1"
+tauri-plugin-os = "2.3.2"
+tauri-plugin-single-instance = "2.4.2"
+tauri-plugin-sql = { version = "2.4.0", features = ["sqlite"] }
+tauri-plugin-updater = "2.10.1"

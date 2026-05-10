@@ -1,0 +1,33 @@
+[package]
+name = "tdds-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[dependencies]
+thetadatadx.workspace = true
+tdbe.workspace = true
+rustls.workspace = true
+tokio.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+sqlx.workspace = true
+arrow-array.workspace = true
+arrow-schema.workspace = true
+arrow-csv.workspace = true
+arrow-json.workspace = true
+parquet.workspace = true
+uuid.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+# Used for `tier::fetch_and_install_remote` — the runtime override
+# fetches the latest `openapiv3.yaml` from `docs.thetadata.us` so a
+# desktop install picks up tier changes ThetaData publishes after
+# the binary was built. Re-uses the rustls-backed reqwest already
+# pulled in transitively via thetadatadx, so no extra TLS bloat.
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
