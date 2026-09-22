@@ -145,7 +145,7 @@ pub async fn dispatch_raw(client: &Client, spec: &EndpointSpec) -> crate::Result
             )));
         }
     }
-    invoke_endpoint(client.market_data(), &spec.endpoint, &args)
+    invoke_endpoint(client.raw(), &spec.endpoint, &args)
         .await
         .map_err(|e| crate::Error::Other(format!("invoke {}: {:?}", spec.endpoint, e)))
 }

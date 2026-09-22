@@ -1,4 +1,17 @@
-//! Thin wrapper around `thetadatadx::Client`.
+//! Thin wrapper around `thetadatadx::MarketDataClient`.
+//!
+//! Deliberately the market-data client, not the unified one. This app
+//! only ever pulls historical data and flat files, and the unified
+//! `Client` additionally owns a streaming surface whose consumer
+//! defaults to a spin wait — "~100% of one core" by the SDK's own
+//! description. Holding a core to run no stream is indefensible in a
+//! desktop tool, and configuring that away treats the symptom; not
+//! constructing the surface removes it.
+//!
+//! It also keeps the app out of the way. Streaming connections are
+//! metered per account, so a store that quietly held one would compete
+//! with whatever the user runs alongside it. Nothing here touches that
+//! budget.
 //!
 //! ThetaData accepts either an API key or an email and password, and so
 //! does this app. A key is the better credential for a downloader: it is
@@ -18,7 +31,7 @@ use crate::tier::{Tier, UserTiers};
 
 #[derive(Clone)]
 pub struct Client {
-    inner: Arc<thetadatadx::Client>,
+    inner: Arc<MarketDataClient>,
 }
 
 impl Client {
@@ -55,8 +68,7 @@ impl Client {
     }
 
     async fn connect_with(creds: Credentials) -> crate::Result<Self> {
-        let cfg = DirectConfig::production();
-        let inner = thetadatadx::Client::connect(&creds, cfg).await?;
+        let inner = MarketDataClient::connect(&creds, DirectConfig::production()).await?;
         Ok(Self {
             inner: Arc::new(inner),
         })
@@ -68,29 +80,22 @@ impl Client {
             .ok();
     }
 
-    pub fn raw(&self) -> &thetadatadx::Client {
+    /// The query surface every endpoint dispatch and flat-file pull
+    /// runs through.
+    pub fn raw(&self) -> &MarketDataClient {
         &self.inner
     }
 
-    /// The market-data query surface every endpoint dispatch runs through.
-    pub fn market_data(&self) -> &MarketDataClient {
-        self.inner.market_data()
-    }
-
-    /// User's per-asset-class subscription tiers, decoded from the auth
-    /// response captured at connect time. ThetaData's Nexus carries four
-    /// fields (`stock_subscription`, `options_subscription`,
-    /// `indices_subscription`, `interest_rate_subscription`) and
-    /// `SubscriptionInfo` surfaces all four; a field the auth response
-    /// omitted comes back as the literal `"Unknown"`, which
-    /// `Tier::from_label` maps to `Tier::Unknown`.
+    /// User's per-asset-class subscription tiers, captured from the auth
+    /// response at connect time. The client exposes these as a typed
+    /// enum per class, so nothing here parses a label; a class the
+    /// response omitted arrives as `None` and maps to `Tier::Unknown`.
     pub fn user_tiers(&self) -> UserTiers {
-        let info = self.inner.subscription_info();
         UserTiers {
-            stock: Tier::from_label(&info.stock),
-            options: Tier::from_label(&info.options),
-            indices: Tier::from_label(&info.indices),
-            interest_rate: Tier::from_label(&info.interest_rate),
+            stock: Tier::from_sdk(self.inner.stock_tier()),
+            options: Tier::from_sdk(self.inner.options_tier()),
+            indices: Tier::from_sdk(self.inner.indices_tier()),
+            interest_rate: Tier::from_sdk(self.inner.interest_rate_tier()),
         }
     }
 
@@ -102,11 +107,7 @@ impl Client {
         start: chrono::NaiveDate,
         end: chrono::NaiveDate,
     ) -> crate::Result<Vec<chrono::NaiveDate>> {
-        let raw = self
-            .inner
-            .market_data()
-            .stock_list_dates("TRADE", symbol)
-            .await?;
+        let raw = self.inner.stock_list_dates("TRADE", symbol).await?;
         Ok(raw
             .iter()
             .filter_map(|s| chrono::NaiveDate::parse_from_str(&s.replace('-', ""), "%Y%m%d").ok())

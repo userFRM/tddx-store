@@ -1,12 +1,11 @@
 //! Subscription-tier gating.
 //!
 //! ThetaData partitions historical access into four tiers per asset class
-//! (Free / Value / Standard / Pro). The auth response carries the
-//! customer's tier per asset class; `thetadatadx` exposes all four on
-//! `SubscriptionInfo`. We map endpoint category +
-//! subcategory to a conservative minimum tier and expose a
-//! ranked-comparison gate plus a stable upgrade URL the UI links to when
-//! the user is below the bar.
+//! (Free / Value / Standard / Pro). The market-data client exposes the
+//! customer's tier per class as a typed enum, captured at authentication.
+//! We map endpoint category + subcategory to a conservative minimum tier
+//! and expose a ranked-comparison gate plus a stable upgrade URL the UI
+//! links to when the user is below the bar.
 //!
 //! The gating is advisory — the gRPC server is the source of truth and
 //! returns `PermissionDenied` for under-entitled calls. The UI uses this
@@ -68,14 +67,26 @@ impl Tier {
         }
     }
 
-    /// Parse the wire/label string emitted by `thetadatadx` (case-insensitive).
-    pub fn from_label(s: &str) -> Tier {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "free" | "0" => Tier::Free,
-            "value" | "1" => Tier::Value,
-            "standard" | "2" => Tier::Standard,
-            "pro" | "professional" | "3" => Tier::Pro,
-            _ => Tier::Unknown,
+    /// Map the SDK's typed subscription tier. `None` means the auth
+    /// response carried no tier for that asset class.
+    pub fn from_sdk(tier: Option<thetadatadx::SubscriptionTier>) -> Tier {
+        match tier {
+            Some(thetadatadx::SubscriptionTier::Free) => Tier::Free,
+            Some(thetadatadx::SubscriptionTier::Value) => Tier::Value,
+            Some(thetadatadx::SubscriptionTier::Standard) => Tier::Standard,
+            Some(thetadatadx::SubscriptionTier::Pro) => Tier::Pro,
+            None => Tier::Unknown,
+        }
+    }
+
+    /// The SDK's own view of this tier, where one exists.
+    fn as_sdk(self) -> Option<thetadatadx::SubscriptionTier> {
+        match self {
+            Tier::Unknown => None,
+            Tier::Free => Some(thetadatadx::SubscriptionTier::Free),
+            Tier::Value => Some(thetadatadx::SubscriptionTier::Value),
+            Tier::Standard => Some(thetadatadx::SubscriptionTier::Standard),
+            Tier::Pro => Some(thetadatadx::SubscriptionTier::Pro),
         }
     }
 
@@ -96,13 +107,10 @@ impl Tier {
     /// accepted, queued and paced server-side, and only overflow past
     /// the server queue returns 429. Firing more than this buys
     /// pacing, not parallelism, so the pool sizes to it and stops.
-    pub const fn workers(self) -> usize {
-        match self {
-            Tier::Unknown | Tier::Free => 1,
-            Tier::Value => 2,
-            Tier::Standard => 4,
-            Tier::Pro => 8,
-        }
+    pub fn workers(self) -> usize {
+        // The figure is the SDK's, not a second copy of it here.
+        self.as_sdk()
+            .map_or(1, thetadatadx::SubscriptionTier::max_concurrent_requests)
     }
 }
 
@@ -589,15 +597,21 @@ mod tests {
     }
 
     #[test]
-    fn from_label_handles_all_variants() {
-        assert_eq!(Tier::from_label("Free"), Tier::Free);
-        assert_eq!(Tier::from_label("VALUE"), Tier::Value);
-        assert_eq!(Tier::from_label("standard"), Tier::Standard);
-        assert_eq!(Tier::from_label("Pro"), Tier::Pro);
-        assert_eq!(Tier::from_label("Professional"), Tier::Pro);
-        assert_eq!(Tier::from_label("3"), Tier::Pro);
-        assert_eq!(Tier::from_label("garbage"), Tier::Unknown);
-        assert_eq!(Tier::from_label(""), Tier::Unknown);
+    fn sdk_tiers_round_trip() {
+        use thetadatadx::SubscriptionTier as Sdk;
+        for (sdk, ours) in [
+            (Sdk::Free, Tier::Free),
+            (Sdk::Value, Tier::Value),
+            (Sdk::Standard, Tier::Standard),
+            (Sdk::Pro, Tier::Pro),
+        ] {
+            assert_eq!(Tier::from_sdk(Some(sdk)), ours);
+            assert_eq!(ours.as_sdk(), Some(sdk));
+            // The concurrency figure must stay the SDK's, not drift here.
+            assert_eq!(ours.workers(), sdk.max_concurrent_requests());
+        }
+        assert_eq!(Tier::from_sdk(None), Tier::Unknown);
+        assert_eq!(Tier::Unknown.workers(), 1);
     }
 
     #[test]
