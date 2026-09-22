@@ -94,14 +94,12 @@
     if (app.connState !== "connected") navigate("settings");
   }
 
-  // ── Cmd/Ctrl-K global focus on search (placeholder for now) ──
-  let searchEl = $state<HTMLInputElement | undefined>(undefined);
-  let searchQuery = $state("");
+  // ⌘K belongs to the command palette, which registers its own global
+  // handler. This used to claim the shortcut too and focus a search
+  // input that was bound to nothing — so the most prominent control in
+  // the window swallowed the accelerator and then did nothing with what
+  // you typed, while the palette behind it flickered open and shut.
   function onKey(e: KeyboardEvent) {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-      e.preventDefault();
-      searchEl?.focus();
-    }
     if (e.key === "Escape" && app.composer.open) {
       closeComposer();
     }
@@ -132,15 +130,20 @@
       <span class="brand-tag text-caption">v{APP_VERSION}</span>
     </div>
 
+    <!-- A button, not an input: it opens the palette, which owns the
+         search field. Rendering a real input here invited typing into
+         something that could not answer. -->
     <div class="search-wrap">
       <Search size={14} class="search-icon" />
-      <input
-        bind:this={searchEl}
-        bind:value={searchQuery}
+      <button
+        type="button"
         class="search-input"
-        type="search"
-        placeholder="Search datasets, symbols, endpoints…  (⌘K)"
-      />
+        onclick={() => (app.cmdkOpen2 = true)}
+        aria-label="Search datasets, symbols and endpoints"
+      >
+        <span>Search datasets, symbols, endpoints…</span>
+        <kbd>⌘K</kbd>
+      </button>
     </div>
 
     <div class="topbar-right">
@@ -325,18 +328,36 @@
   .search-input {
     width: 100%;
     height: 30px;
-    padding: 0 var(--sp-3) 0 32px;
+    padding: 0 var(--sp-2) 0 32px;
     background: var(--surface-2);
     border: 1px solid var(--border);
     border-radius: var(--r-sm);
-    color: var(--fg);
+    color: var(--fg-subtle);
     font-size: var(--text-body-sm);
     outline: none;
+    cursor: text;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-2);
+    text-align: left;
     transition: border-color var(--dur-fast) var(--ease-standard);
   }
-  .search-input:focus {
+  .search-input:hover {
+    border-color: var(--border-strong);
+  }
+  .search-input:focus-visible {
     border-color: var(--accent);
     box-shadow: 0 0 0 2px var(--accent-tint);
+  }
+  .search-input kbd {
+    font-family: var(--font-numeric);
+    font-size: var(--text-caption);
+    color: var(--fg-subtle);
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
   }
   .search-input::placeholder { color: var(--fg-subtle); }
 
