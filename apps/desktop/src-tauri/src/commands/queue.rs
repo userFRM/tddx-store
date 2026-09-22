@@ -87,26 +87,71 @@ pub async fn enqueue(state: State<'_, Arc<AppState>>, args: EnqueueArgs) -> Resu
         }
         _ => return Err("pass date or start+end".into()),
     };
-    let priority = args.priority.unwrap_or(0);
-    for (d, end) in &units {
-        let spec = DataSpec {
-            kind: kind.clone(),
-            symbol: args.symbol.clone(),
-            date: *d,
-            end_date: *end,
-            interval: args.interval.clone(),
-            expiration: args.expiration.clone().unwrap_or_else(|| "*".into()),
-            strike: args.strike.clone().unwrap_or_else(|| "*".into()),
-            right: args.right.clone().unwrap_or_else(|| "both".into()),
-            transforms: args.transforms.clone().unwrap_or_default(),
-            extra: args.extra.clone().unwrap_or_default(),
-        };
-        queue
-            .enqueue(spec, format, &cfg.output_dir, priority)
+    // Several option endpoints refuse `expiration=*` outright — the
+    // greeks series, option OHLC, and the two option list endpoints —
+    // so a task carrying the wildcard could only ever fail. Resolve the
+    // real expirations and fan out over them. Only the ones that were
+    // still live during the requested window are worth asking for; an
+    // expiration that had already passed has nothing to report.
+    let requested_expiration = args.expiration.clone().unwrap_or_else(|| "*".into());
+    let expirations: Vec<String> = if kind.rejects_expiration_wildcard()
+        && is_wildcard(&requested_expiration)
+    {
+        let client_guard = state.client.read().await;
+        let client = client_guard.as_ref().ok_or("client not connected")?.clone();
+        drop(client_guard);
+        let window_start = units.iter().map(|(d, _)| *d).min();
+        let all = client
+            .option_expirations(&args.symbol)
             .await
             .map_err(|e| e.to_string())?;
+        let live: Vec<String> = all
+            .into_iter()
+            .filter(|e| window_start.is_none_or(|start| *e >= start))
+            .map(|e| e.format("%Y%m%d").to_string())
+            .collect();
+        if live.is_empty() {
+            return Err(format!(
+                "{} needs a specific expiration and {} has none on or after the requested window",
+                kind.as_str(),
+                args.symbol
+            ));
+        }
+        live
+    } else {
+        vec![requested_expiration]
+    };
+
+    let priority = args.priority.unwrap_or(0);
+    let mut queued = 0usize;
+    for (d, end) in &units {
+        for expiration in &expirations {
+            let spec = DataSpec {
+                kind: kind.clone(),
+                symbol: args.symbol.clone(),
+                date: *d,
+                end_date: *end,
+                interval: args.interval.clone(),
+                expiration: expiration.clone(),
+                strike: args.strike.clone().unwrap_or_else(|| "*".into()),
+                right: args.right.clone().unwrap_or_else(|| "both".into()),
+                transforms: args.transforms.clone().unwrap_or_default(),
+                extra: args.extra.clone().unwrap_or_default(),
+            };
+            queue
+                .enqueue(spec, format, &cfg.output_dir, priority)
+                .await
+                .map_err(|e| e.to_string())?;
+            queued += 1;
+        }
     }
-    Ok(units.len())
+    Ok(queued)
+}
+
+/// `*` is the app's own default for "every expiration"; an empty field
+/// means the same thing.
+fn is_wildcard(v: &str) -> bool {
+    v.is_empty() || v == "*"
 }
 
 /// How many rows a snapshot carries. The UI paginates against the

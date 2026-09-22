@@ -99,6 +99,20 @@ impl Client {
         }
     }
 
+    /// Every expiration the server lists for `symbol`, as `YYYYMMDD`.
+    ///
+    /// Several option endpoints refuse `expiration=*` and answer only
+    /// for one concrete expiration, so the app resolves the real list
+    /// and fans out rather than passing a wildcard the server will
+    /// reject. See [`crate::spec::REJECTS_EXPIRATION_WILDCARD`].
+    pub async fn option_expirations(&self, symbol: &str) -> crate::Result<Vec<chrono::NaiveDate>> {
+        let raw = self.inner.option_list_expirations(symbol).await?;
+        Ok(raw
+            .iter()
+            .filter_map(|s| chrono::NaiveDate::parse_from_str(&s.replace('-', ""), "%Y%m%d").ok())
+            .collect())
+    }
+
     /// All trading dates the server has TRADE data for, intersected with
     /// `[start, end]`. Used to drive per-day fan-out.
     pub async fn trading_days(
