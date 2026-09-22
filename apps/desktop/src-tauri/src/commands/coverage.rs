@@ -121,6 +121,7 @@ pub async fn requeue_missing_dates(
             expiration: "*".into(),
             strike: "*".into(),
             right: "both".into(),
+            end_date: None,
             transforms: Default::default(),
             extra: Default::default(),
         };

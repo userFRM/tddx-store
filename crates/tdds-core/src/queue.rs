@@ -72,6 +72,7 @@ impl Queue {
                 kind        TEXT NOT NULL,
                 symbol      TEXT NOT NULL,
                 date        TEXT NOT NULL,
+                end_date    TEXT,
                 interval    TEXT,
                 expiration  TEXT NOT NULL DEFAULT '*',
                 strike      TEXT NOT NULL DEFAULT '*',
@@ -102,6 +103,7 @@ impl Queue {
         Self::add_column_if_missing(pool, "ALTER TABLE tasks ADD COLUMN transforms_json TEXT")
             .await?;
         Self::add_column_if_missing(pool, "ALTER TABLE tasks ADD COLUMN extra_json TEXT").await?;
+        Self::add_column_if_missing(pool, "ALTER TABLE tasks ADD COLUMN end_date TEXT").await?;
         Self::add_column_if_missing(pool, "ALTER TABLE tasks ADD COLUMN claimed_by TEXT").await?;
         Self::add_column_if_missing(pool, "ALTER TABLE tasks ADD COLUMN claimed_at INTEGER")
             .await?;
@@ -160,15 +162,16 @@ impl Queue {
             Some(serde_json::to_string(&spec.extra)?)
         };
         sqlx::query(
-            r#"INSERT INTO tasks (id, kind, symbol, date, interval, expiration, strike, right_,
-                format, output_dir, status, priority, attempts, created_at, transforms_json,
-                extra_json)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)"#,
+            r#"INSERT INTO tasks (id, kind, symbol, date, end_date, interval, expiration, strike,
+                right_, format, output_dir, status, priority, attempts, created_at,
+                transforms_json, extra_json)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)"#,
         )
         .bind(&id)
         .bind(spec.kind.as_str())
         .bind(&spec.symbol)
         .bind(spec.ymd())
+        .bind(spec.end_date.map(|d| d.format("%Y%m%d").to_string()))
         .bind(&spec.interval)
         .bind(&spec.expiration)
         .bind(&spec.strike)
@@ -594,6 +597,10 @@ struct TaskRow {
     /// v0.1.2 — rows written before it read back as no extra args.
     #[sqlx(default)]
     extra_json: Option<String>,
+    /// End of a range pull. Optional column added in v0.1.3; rows
+    /// written before it read back as single-day.
+    #[sqlx(default)]
+    end_date: Option<String>,
 }
 
 impl TryFrom<TaskRow> for Task {
@@ -614,6 +621,10 @@ impl TryFrom<TaskRow> for Task {
                 symbol: r.symbol,
                 date,
                 interval: r.interval,
+                end_date: r
+                    .end_date
+                    .as_deref()
+                    .and_then(|d| NaiveDate::parse_from_str(d, "%Y%m%d").ok()),
                 expiration: r.expiration,
                 strike: r.strike,
                 right: r.right_,
@@ -657,6 +668,7 @@ mod tests {
             expiration: "*".into(),
             strike: "*".into(),
             right: "both".into(),
+            end_date: None,
             transforms: crate::Transforms::default(),
             extra: Default::default(),
         }
@@ -984,6 +996,7 @@ mod tests {
                 kind              TEXT NOT NULL,
                 symbol            TEXT NOT NULL,
                 date              TEXT NOT NULL,
+                end_date          TEXT,
                 interval          TEXT,
                 expiration        TEXT NOT NULL DEFAULT '*',
                 strike            TEXT NOT NULL DEFAULT '*',

@@ -289,6 +289,11 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: var(--sp-4);
+    /* Two cards of very different height sit side by side — Account is
+       a status line and a button, Storage is two paths and a tier
+       table. Stretching Account to match left a card that was mostly
+       empty. */
+    align-items: start;
   }
   @media (max-width: 1100px) { .settings-grid { grid-template-columns: 1fr; } }
 

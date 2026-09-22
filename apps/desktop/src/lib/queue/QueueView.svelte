@@ -27,9 +27,10 @@
     Circle,
     AlertCircle,
     Search,
+    ArrowRight,
   } from "lucide-svelte";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
-  import { app, log, refreshQueueSnapshot } from "$lib/stores/app.svelte";
+  import { app, log, navigate, refreshQueueSnapshot } from "$lib/stores/app.svelte";
   import { api, fmtBytes, fmtNum, type TaskView } from "$lib/api";
 
   type StatusFilter = "all" | "pending" | "running" | "done" | "failed" | "empty";
@@ -59,6 +60,11 @@
   const finishedCount = $derived(
     countOf("done") + countOf("failed") + countOf("empty"),
   );
+
+  function clearFilters() {
+    activeFilter = "all";
+    query = "";
+  }
 
   const rows = $derived.by<TaskView[]>(() => {
     const q = query.trim().toLowerCase();
@@ -332,7 +338,11 @@
       </div>
     {/if}
 
-    {#if app.connState !== "connected" && (snap === null || totalCount === 0)}
+    <!-- An empty list needs an explanation whatever the reason for it.
+         This was gated on being *disconnected*, so the one state a
+         working user actually reaches — connected, nothing queued yet —
+         rendered a blank panel under the filter bar. -->
+    {#if rows.length === 0}
       <div class="empty-queue">
         <div class="empty-icon" aria-hidden="true">
           <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
@@ -340,11 +350,30 @@
             <path d="M14 20h12M20 14v12" stroke="var(--fg-subtle)" stroke-width="1.5" stroke-linecap="round" />
           </svg>
         </div>
-        <p class="empty-label">Queue is empty</p>
-        <p class="empty-sub text-body-sm fg-muted">
-          Browse datasets and add items to get started.
-          Connect to ThetaData first from Settings.
-        </p>
+        {#if app.connState !== "connected"}
+          <p class="empty-label">Not connected</p>
+          <p class="empty-sub text-body-sm fg-muted">
+            Sign in from Settings to open the queue.
+          </p>
+        {:else if totalCount > 0}
+          <p class="empty-label">Nothing matches</p>
+          <p class="empty-sub text-body-sm fg-muted">
+            {plural(totalCount, "task")} in the queue, none in this view.
+          </p>
+          <button class="btn btn-secondary btn-sm" onclick={clearFilters}>
+            Clear filters
+          </button>
+        {:else}
+          <p class="empty-label">Queue is empty</p>
+          <p class="empty-sub text-body-sm fg-muted">
+            Pick a dataset in Browse and queue it — tasks show up here as
+            they run.
+          </p>
+          <button class="btn btn-secondary btn-sm" onclick={() => navigate("browse")}>
+            Browse datasets
+            <ArrowRight size={14} strokeWidth={1.75} />
+          </button>
+        {/if}
       </div>
     {:else}
       {#each rows as task (task.id)}

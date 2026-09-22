@@ -109,6 +109,16 @@ pub struct DataSpec {
     /// `*` (default) = every expiration on this date.
     #[serde(default = "default_expiration")]
     pub expiration: String,
+    /// The last date of a range pull, when the endpoint takes a range
+    /// rather than a single day.
+    ///
+    /// Endpoints split into two shapes: some declare `date` and are
+    /// fanned out one task per trading day, others declare
+    /// `start_date`/`end_date` and answer a whole window in one call.
+    /// `date` is the start in both cases; this is the end, and it is
+    /// `None` for the per-day shape.
+    #[serde(default)]
+    pub end_date: Option<NaiveDate>,
     /// `*` = every strike.
     #[serde(default = "default_strike")]
     pub strike: String,
@@ -150,6 +160,15 @@ impl DataSpec {
         self.date.format("%Y%m%d").to_string()
     }
 
+    /// The end of the window, as the wire spells dates. A spec with no
+    /// explicit end covers a single day.
+    pub fn end_ymd(&self) -> String {
+        self.end_date
+            .unwrap_or(self.date)
+            .format("%Y%m%d")
+            .to_string()
+    }
+
     /// The part of a filename that distinguishes this pull from another
     /// of the same dataset, symbol and date.
     ///
@@ -170,6 +189,13 @@ impl DataSpec {
         let right = self.right.to_lowercase();
         if right != "both" && right != "*" && !right.is_empty() {
             parts.push(sanitize(&right));
+        }
+        // A window is part of what makes the pull distinct: the same
+        // dataset over two different ranges is two different files.
+        if let Some(end) = self.end_date {
+            if end != self.date {
+                parts.push(format!("to{}", end.format("%Y%m%d")));
+            }
         }
         if let Some(interval) = self.interval.as_deref() {
             let normalized = normalize_interval(interval);
@@ -229,6 +255,14 @@ impl DataSpec {
                 "strike" => Some(self.strike.clone()),
                 "right" => Some(self.right.clone()),
                 "interval" => self.interval.clone(),
+                // The range shape. Filling only `date` meant every
+                // endpoint that declares a window and no single day —
+                // the EOD datasets, the greeks EOD datasets, both
+                // at-time datasets — reached the dispatcher without the
+                // arguments it declares as required and failed, every
+                // task, every time.
+                "start_date" => Some(self.ymd()),
+                "end_date" => Some(self.end_ymd()),
                 other => self.extra.get(other).cloned(),
             };
             if let Some(v) = value {
@@ -403,6 +437,7 @@ mod tests {
             expiration: "*".into(),
             strike: "*".into(),
             right: "both".into(),
+            end_date: None,
             transforms: crate::Transforms::default(),
             extra: BTreeMap::new(),
         }
@@ -413,6 +448,62 @@ mod tests {
     /// at the queue: `to_endpoint_spec` filled six names and dropped
     /// everything else, so a user who asked for 5 strikes around spot
     /// silently downloaded the whole chain.
+    /// The EOD datasets, the greeks EOD datasets and both at-time
+    /// datasets declare `start_date`/`end_date` and no `date`. Filling
+    /// only `date` meant every task for them reached the dispatcher
+    /// without the arguments the registry marks required, and failed
+    /// with "missing required arg 'start_date'" — 100% of the time,
+    /// for every symbol and every window.
+    #[test]
+    fn range_endpoints_receive_the_window_they_declare() {
+        let mut spec = option_spec();
+        spec.kind = DataKind::parse("stock_history_eod").expect("known dataset");
+        spec.date = NaiveDate::from_ymd_opt(2023, 9, 22).unwrap();
+        spec.end_date = NaiveDate::from_ymd_opt(2026, 9, 22);
+
+        let lowered = spec.to_endpoint_spec();
+        assert_eq!(
+            lowered.args.get("start_date").map(String::as_str),
+            Some("20230922")
+        );
+        assert_eq!(
+            lowered.args.get("end_date").map(String::as_str),
+            Some("20260922")
+        );
+
+        // Every argument the endpoint marks required must be present,
+        // whatever the shape.
+        let meta = thetadatadx::find("stock_history_eod").expect("registry knows it");
+        for p in meta.params.iter().filter(|p| p.required) {
+            assert!(
+                lowered.args.contains_key(p.name),
+                "required arg `{}` never reaches the request",
+                p.name
+            );
+        }
+    }
+
+    /// A spec with no explicit end covers one day, so a single-day pull
+    /// through a range endpoint still asks for a valid window.
+    #[test]
+    fn a_dateless_spec_asks_for_a_single_day_window() {
+        let mut spec = option_spec();
+        spec.kind = DataKind::parse("stock_history_eod").expect("known dataset");
+        let lowered = spec.to_endpoint_spec();
+        assert_eq!(lowered.args.get("start_date"), lowered.args.get("end_date"));
+    }
+
+    /// Two windows over the same dataset are two different files.
+    #[test]
+    fn the_window_is_part_of_the_filename() {
+        let mut a = option_spec();
+        a.kind = DataKind::parse("stock_history_eod").expect("known dataset");
+        let mut b = a.clone();
+        a.end_date = NaiveDate::from_ymd_opt(2026, 1, 1);
+        b.end_date = NaiveDate::from_ymd_opt(2026, 6, 1);
+        assert_ne!(a.file_stem(), b.file_stem());
+    }
+
     #[test]
     fn extra_args_reach_the_endpoint_when_it_declares_them() {
         let mut spec = option_spec();
@@ -470,6 +561,7 @@ mod tests {
             expiration: "*".into(),
             strike: "*".into(),
             right: "both".into(),
+            end_date: None,
             transforms: crate::Transforms::default(),
             extra: BTreeMap::new(),
         };
@@ -512,6 +604,7 @@ mod tests {
             expiration: "20261016".into(),
             strike: "5400.5".into(),
             right: "call".into(),
+            end_date: None,
             transforms: crate::Transforms::default(),
             extra: BTreeMap::new(),
         };

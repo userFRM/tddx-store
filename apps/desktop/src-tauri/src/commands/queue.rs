@@ -50,27 +50,44 @@ pub async fn enqueue(state: State<'_, Arc<AppState>>, args: EnqueueArgs) -> Resu
     let kind = DataKind::parse(&args.kind).ok_or_else(|| format!("unknown kind {}", args.kind))?;
     let format = OutputFormat::parse(&args.format)
         .ok_or_else(|| format!("unknown format {}", args.format))?;
-    let dates: Vec<NaiveDate> = match (&args.date, &args.start, &args.end) {
-        (Some(d), _, _) => vec![parse_ymd(d)?],
+    // Endpoints come in two shapes and the queue has to respect the
+    // difference. One declares `date` and answers a single session, so
+    // a window becomes one task per trading day. The other declares
+    // `start_date`/`end_date` and answers the whole window in one call
+    // — fanning *that* out produced N tasks each missing the arguments
+    // the endpoint requires, so every one of them failed.
+    let takes_single_date = thetadatadx::find(kind.endpoint())
+        .is_some_and(|m| m.params.iter().any(|p| p.name == "date"));
+
+    let units: Vec<(NaiveDate, Option<NaiveDate>)> = match (&args.date, &args.start, &args.end) {
+        (Some(d), _, _) => vec![(parse_ymd(d)?, None)],
         (None, Some(s), Some(e)) => {
-            let client_guard = state.client.read().await;
-            let client = client_guard.as_ref().ok_or("client not connected")?.clone();
-            drop(client_guard);
             let s = parse_ymd(s)?;
             let e = parse_ymd(e)?;
-            client
-                .trading_days(&args.symbol, s, e)
-                .await
-                .map_err(|e| e.to_string())?
+            if takes_single_date {
+                let client_guard = state.client.read().await;
+                let client = client_guard.as_ref().ok_or("client not connected")?.clone();
+                drop(client_guard);
+                client
+                    .trading_days(&args.symbol, s, e)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .map(|d| (d, None))
+                    .collect()
+            } else {
+                vec![(s, Some(e))]
+            }
         }
         _ => return Err("pass date or start+end".into()),
     };
     let priority = args.priority.unwrap_or(0);
-    for d in &dates {
+    for (d, end) in &units {
         let spec = DataSpec {
             kind: kind.clone(),
             symbol: args.symbol.clone(),
             date: *d,
+            end_date: *end,
             interval: args.interval.clone(),
             expiration: args.expiration.clone().unwrap_or_else(|| "*".into()),
             strike: args.strike.clone().unwrap_or_else(|| "*".into()),
@@ -83,7 +100,7 @@ pub async fn enqueue(state: State<'_, Arc<AppState>>, args: EnqueueArgs) -> Resu
             .await
             .map_err(|e| e.to_string())?;
     }
-    Ok(dates.len())
+    Ok(units.len())
 }
 
 /// How many rows a snapshot carries. The UI paginates against the
