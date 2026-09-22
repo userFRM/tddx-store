@@ -182,6 +182,38 @@ colour has a token (`--accent-tint`, `--good-ring`, `--tier-pro-bg`, …)
 precisely because the first version of this app hard-coded rgba() into
 29 files and could only ever be dark.
 
+### Dark, and four directions that were rejected
+
+The brand sheet is a light-mode document, so the dark variant had to be
+derived rather than looked up. Four attempts were rejected in review;
+they are recorded here so they are not retried.
+
+- **A second hue as the dark accent — amber, then green.** Introducing
+  any hue the brand does not own makes the dark theme read as a
+  different product wearing the same logo. Purple was ruled out
+  separately: it is close enough to Databento's identity to invite the
+  comparison.
+- **Cyan `#00D4FF` alongside the brand blue.** Turquoise and blue
+  together at similar saturation fight rather than sit in a ladder.
+- **Lightening the brand blue to `rgb(77, 155, 255)`.** It desaturates
+  into a washed periwinkle that reads as disabled rather than
+  interactive — the same failure as a lighter hover on a light canvas,
+  a step up the page instead of into it.
+- **A flat `rgb(11, 95, 208)` fill.** Legible, and inert. A large flat
+  panel of one mid blue is also the worst possible bed for grey label
+  text, which is where it was used.
+
+What shipped instead: one hue, differentiated by **weight and
+gradient** rather than by adding a colour. `--accent` stays the link
+blue; `--accent-fill` is a gradient (`135deg`, `#0B63DD → #5B23D6`) for
+filled actions, and `--brand-gradient` (`#1074FF → #00D4FF`) is allowed
+only on surfaces that carry no text. The tier ladder climbs by weight,
+with Pro as the only filled chip, which is why grey-on-fill never has
+to be legible anywhere else.
+
+The logo's own two values — `#a0a0a0` and `#1074FF` — are fixed in both
+themes.
+
 ## Typography
 
 Inter for everything UI, at the weights the brand sheet specifies (600
