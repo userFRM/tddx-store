@@ -48,7 +48,7 @@
       {#each presets as p (p.id)}
         <article class="card">
           <div class="head">
-            <span class="id-pill text-mono">{p.id.toUpperCase()}</span>
+            <span class="id-pill text-figures">{p.id.toUpperCase()}</span>
           </div>
           <h3 class="t">
             <button type="button" class="card-open" onclick={() => openIndexPreset(p)}>

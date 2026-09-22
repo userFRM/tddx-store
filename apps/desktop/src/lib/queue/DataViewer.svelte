@@ -72,7 +72,7 @@
         <div class="title-block">
           <span class="text-caption">Sample</span>
           <h2 class="title">{title || "Parquet preview"}</h2>
-          <p class="path text-mono">{path}</p>
+          <p class="path text-figures">{path}</p>
           {#if result}
             <div class="meta tabnum">
               <span>{fmtNum(result.total_rows)} rows total</span>

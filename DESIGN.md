@@ -201,11 +201,26 @@ on Windows. The brand sheet names IBM Plex Mono, but that is a slab
 face built for print and reads as a typewriter on screen; `ui-monospace`
 also avoids shipping a webfont for a desktop app.
 
-**A number in a column is not code.** Counts, byte sizes, durations and
-percentages use `.tabnum`, which is Inter with tabular figures. Digits
-align perfectly, which is the actual requirement, and the table stops
-looking like terminal output. Reach for the mono only when the value
-would be wrong to re-wrap or re-space.
+**A number in a column is not code.** Counts, byte sizes, dates and
+percentages use `.tabnum` and `.text-figures`, both of which are the UI
+face with tabular figures. Digits align perfectly, which is the actual
+requirement, and the table stops reading as terminal output. Reach for
+the mono only when the value would be wrong to re-wrap or re-space — a
+path, a hash, a contract spec.
+
+That distinction matters more than it sounds, because the generic
+`monospace` keyword resolves to **Courier** on macOS. A stats line that
+falls through to it looks like a 1984 dot-matrix report. The mono stack
+therefore names real faces first — SF Mono, Cascadia, Menlo — and keeps
+`monospace` only as the last resort it is.
+
+**Inter is not installed on a stock macOS or Windows machine.** The
+stack falls through to `system-ui`, which is SF Pro or Segoe UI, so the
+app has been rendering in the system face rather than the brand one.
+That is a perfectly good fallback and nothing looks broken, but the
+brand sheet specifies Inter and the app does not currently honour it.
+Bundling the variable font would fix it; until then this file should
+not claim otherwise.
 
 ## The wordmark
 

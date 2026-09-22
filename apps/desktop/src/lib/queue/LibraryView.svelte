@@ -284,7 +284,7 @@
     <div class="header-left">
       <h1 class="lib-title">Library</h1>
       {#if coverage.length > 0}
-        <span class="lib-meta text-mono fg-muted">
+        <span class="lib-meta text-figures fg-muted">
           {grouped.length} {grouped.length === 1 ? "symbol" : "symbols"} · {fmtBytes(coverage.reduce((s, r) => s + r.bytes, 0))} total
         </span>
       {/if}
@@ -366,15 +366,15 @@
                     <ChevronRight size={14} strokeWidth={1.75} />
                   {/if}
                 </div>
-                <span class="symbol-ticker text-mono">{symbol}</span>
+                <span class="symbol-ticker text-figures">{symbol}</span>
                 <div class="symbol-summary">
-                  <span class="sum-stat text-mono">{fmtNum(rows.length)} {rows.length === 1 ? "dataset" : "datasets"}</span>
+                  <span class="sum-stat text-figures">{fmtNum(rows.length)} {rows.length === 1 ? "dataset" : "datasets"}</span>
                   <span class="sum-sep">·</span>
-                  <span class="sum-stat text-mono">{fmtNum(symbolTotalFiles(rows))} files</span>
+                  <span class="sum-stat text-figures">{fmtNum(symbolTotalFiles(rows))} files</span>
                   <span class="sum-sep">·</span>
-                  <span class="sum-stat text-mono">{fmtBytes(symbolTotalBytes(rows))}</span>
+                  <span class="sum-stat text-figures">{fmtBytes(symbolTotalBytes(rows))}</span>
                   <span class="sum-sep">·</span>
-                  <span class="sum-stat text-mono">{symbolSpan(rows)}</span>
+                  <span class="sum-stat text-figures">{symbolSpan(rows)}</span>
                 </div>
               </button>
 
@@ -398,7 +398,7 @@
                         <code class="kind-name">{row.kind}</code>
                         <span class="kind-title text-body-sm fg-muted">{kindLabel(row.kind)}</span>
                       </div>
-                      <div class="kind-stats text-mono">
+                      <div class="kind-stats text-figures">
                         <span>{fmtNum(row.files)} files</span>
                         <span class="sum-sep">·</span>
                         <span>{fmtBytes(row.bytes)}</span>
@@ -485,7 +485,7 @@
                           </div>
                           <ul class="gap-ranges">
                             {#each toRanges(state.dates) as range}
-                              <li class="gap-range text-mono">
+                              <li class="gap-range text-figures">
                                 {#if range.days === 1}
                                   {range.from}
                                 {:else}
@@ -786,7 +786,7 @@
 
   .kind-name {
     font-family: var(--font-mono);
-    font-size: var(--text-mono);
+    font-size: var(--text-figures);
     color: var(--fg-muted);
   }
 

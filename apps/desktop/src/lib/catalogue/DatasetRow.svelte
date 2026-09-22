@@ -514,7 +514,7 @@
 
   .param-name {
     font-family: var(--font-mono);
-    font-size: var(--text-mono);
+    font-size: var(--text-figures);
     color: var(--fg) !important;
     white-space: nowrap;
     width: 1%;
@@ -523,7 +523,7 @@
 
   .param-type {
     font-family: var(--font-mono);
-    font-size: var(--text-mono);
+    font-size: var(--text-figures);
     color: var(--fg-muted) !important;
     white-space: nowrap;
     width: 1%;
@@ -605,7 +605,7 @@
 
   .mono-path {
     font-family: var(--font-mono);
-    font-size: var(--text-mono);
+    font-size: var(--text-figures);
     color: var(--fg-muted);
     background: transparent;
     padding: 0;
@@ -636,7 +636,7 @@
 
   .entry-name {
     font-family: var(--font-mono);
-    font-size: var(--text-mono);
+    font-size: var(--text-figures);
     color: var(--fg-subtle);
     white-space: nowrap;
     overflow: hidden;

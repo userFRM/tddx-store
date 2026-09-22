@@ -140,7 +140,7 @@
                   <Info size={12} />
                 {/if}
               </span>
-              <span class="log-time text-mono">{fmtTime(entry.ts)}</span>
+              <span class="log-time text-figures">{fmtTime(entry.ts)}</span>
               <span class="log-msg">{entry.msg}</span>
               {#if entry.level === "error"}
                 <span class="log-actions">
@@ -162,7 +162,7 @@
                 </span>
               {/if}
               {#if entry.context}
-                <span class="log-ctx text-mono">
+                <span class="log-ctx text-figures">
                   {Object.entries(entry.context)
                     .map(([k, v]) => `${k}=${v}`)
                     .join(" ")}

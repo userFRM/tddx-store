@@ -211,7 +211,7 @@
     <div class="header-left">
       <h1 class="queue-title">Queue</h1>
       {#if snap}
-        <span class="queue-meta text-mono">
+        <span class="queue-meta text-figures">
           <span>{plural(totalCount, "task")}</span>
           <span class="sep">·</span>
           <span>{fmtBytes(snap.bytes_on_disk)} on disk</span>
@@ -263,7 +263,7 @@
           aria-pressed={activeFilter === f}
         >
           {STATUS_LABELS[f]}
-          <span class="filter-count text-mono">{fmtNum(countOf(f))}</span>
+          <span class="filter-count text-figures">{fmtNum(countOf(f))}</span>
         </button>
       {/each}
     </div>
@@ -380,7 +380,7 @@
             <div class="task-top">
               <code class="task-kind">{task.kind}</code>
               <span class="task-symbol">{task.symbol}</span>
-              <span class="task-date text-mono">{task.date}</span>
+              <span class="task-date text-figures">{task.date}</span>
             </div>
 
             {#if task.status === "running"}
@@ -403,10 +403,10 @@
 
           <div class="task-stats">
             {#if task.rows != null}
-              <span class="stat text-mono">{fmtNum(task.rows)} rows</span>
+              <span class="stat text-figures">{fmtNum(task.rows)} rows</span>
             {/if}
             {#if task.bytes != null}
-              <span class="stat text-mono">{fmtBytes(task.bytes)}</span>
+              <span class="stat text-figures">{fmtBytes(task.bytes)}</span>
             {/if}
             {#if task.attempts > 1}
               <span class="stat attempts">attempt {task.attempts}</span>
@@ -745,7 +745,7 @@
 
   .task-kind {
     font-family: var(--font-mono);
-    font-size: var(--text-mono);
+    font-size: var(--text-figures);
     color: var(--fg-muted);
     background: var(--surface-2);
     padding: 1px var(--sp-2);
@@ -755,7 +755,7 @@
   .task-symbol {
     font-weight: var(--weight-semi);
     font-family: var(--font-mono);
-    font-size: var(--text-mono);
+    font-size: var(--text-figures);
     color: var(--fg);
     font-variant-numeric: tabular-nums;
   }

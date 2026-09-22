@@ -224,9 +224,9 @@
               <div class="task-head">
                 <div class="task-title">
                   <span class="task-symbol">{t.symbol}</span>
-                  <span class="task-kind text-mono">{t.kind}</span>
+                  <span class="task-kind text-figures">{t.kind}</span>
                 </div>
-                <span class="task-date text-mono">{t.date}</span>
+                <span class="task-date text-figures">{t.date}</span>
               </div>
               <div class="progress-track">
                 <div
@@ -288,9 +288,9 @@
                 <div class="task-title">
                   <span class="task-icon"><XCircle size={12} /></span>
                   <span class="task-symbol">{t.symbol}</span>
-                  <span class="task-kind text-mono">{t.kind}</span>
+                  <span class="task-kind text-figures">{t.kind}</span>
                 </div>
-                <span class="task-date text-mono">{t.date}</span>
+                <span class="task-date text-figures">{t.date}</span>
               </div>
               {#if t.error}
                 <div class="task-error text-body-sm" title={t.error}>
@@ -316,9 +316,9 @@
                 <div class="task-title">
                   <span class="task-icon"><CheckCircle2 size={12} /></span>
                   <span class="task-symbol">{t.symbol}</span>
-                  <span class="task-kind text-mono">{t.kind}</span>
+                  <span class="task-kind text-figures">{t.kind}</span>
                 </div>
-                <span class="task-date text-mono">{t.date}</span>
+                <span class="task-date text-figures">{t.date}</span>
               </div>
               <div class="task-meta tabnum">
                 <span>{fmtNum(t.rows)} rows</span>

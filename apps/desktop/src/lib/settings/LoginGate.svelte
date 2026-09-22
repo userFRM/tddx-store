@@ -207,7 +207,7 @@
             <div class="input-with-icon">
               <KeyRound size={14} class="input-icon" />
               <input
-                class="field-input padded with-trailing text-mono"
+                class="field-input padded with-trailing text-figures"
                 type={showSecret ? "text" : "password"}
                 autocomplete="off"
                 spellcheck="false"

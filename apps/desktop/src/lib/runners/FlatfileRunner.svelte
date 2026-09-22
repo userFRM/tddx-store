@@ -86,7 +86,7 @@
       <div class="form">
         <label class="field">
           <span class="text-caption">Trading day</span>
-          <input class="field-input text-mono" bind:value={date} placeholder="YYYYMMDD" />
+          <input class="field-input text-figures" bind:value={date} placeholder="YYYYMMDD" />
         </label>
         <div class="row">
           <label class="field">
@@ -100,7 +100,7 @@
         </div>
         <label class="field">
           <span class="text-caption">Output path</span>
-          <input class="field-input text-mono" bind:value={outputPath} />
+          <input class="field-input text-figures" bind:value={outputPath} />
         </label>
       </div>
 

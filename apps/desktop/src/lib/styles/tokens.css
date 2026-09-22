@@ -133,8 +133,12 @@
      IBM Plex Mono, but that is a slab face built for print and it reads
      as a typewriter on screen. `ui-monospace` also means no webfont to
      download and no flash of fallback text. */
-  --font-mono:      ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono",
-                    "Roboto Mono", Menlo, Consolas, monospace;
+  /* Named faces first, because the generic `monospace` keyword resolves
+     to Courier on macOS and that is what a bare fallback gets you. SF
+     Mono ships with macOS, Cascadia with Windows Terminal, and Menlo is
+     the reliable macOS floor. */
+  --font-mono:      "SF Mono", "SFMono-Regular", ui-monospace, "Cascadia Mono",
+                    "Segoe UI Mono", "Roboto Mono", Menlo, Consolas, monospace;
 
   /* Figures that need to line up in a column do not need a monospaced
      face; they need tabular figures, which Inter has. Using this rather
@@ -152,7 +156,7 @@
   --text-body:          0.875rem;    /* 14px */
   --text-body-sm:       0.8125rem;   /* 13px */
   --text-caption:       0.6875rem;   /* 11px */
-  --text-mono:          0.8125rem;   /* 13px */
+  --text-figures:       0.8125rem;   /* 13px */
 
   --weight-normal:  400;
   --weight-medium:  500;

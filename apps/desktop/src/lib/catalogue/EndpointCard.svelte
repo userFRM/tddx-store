@@ -29,7 +29,7 @@
   </div>
 
   <div class="body">
-    <h3 class="ep-name text-mono">
+    <h3 class="ep-name text-figures">
       <button type="button" class="card-open" onclick={open}>{endpoint.name}</button>
     </h3>
     <p class="ep-desc">{endpoint.description.split(".")[0]}.</p>
@@ -38,7 +38,7 @@
   <div class="foot">
     <div class="required text-caption">
       <span class="req-key">Required:</span>
-      <span class="req-vals text-mono">{required}</span>
+      <span class="req-vals text-figures">{required}</span>
     </div>
     <button class="run-btn" onclick={open}>
       <Play size={11} fill="currentColor" />

@@ -351,10 +351,10 @@
                 {/if}
                 {#each composer.renames as r, i}
                   <div class="rename-row">
-                    <input class="field-input text-mono" placeholder="upstream"
+                    <input class="field-input text-figures" placeholder="upstream"
                            bind:value={r.from} />
                     <ChevronRight size={12} class="arrow" />
-                    <input class="field-input text-mono" placeholder="renamed"
+                    <input class="field-input text-figures" placeholder="renamed"
                            bind:value={r.to} />
                     <button class="row-btn ghost" onclick={() => removeRename(i)} aria-label="Remove">
                       <Trash2 size={11} />
@@ -379,7 +379,7 @@
                 {/if}
                 {#each composer.drops as d, i}
                   <div class="drop-row">
-                    <input class="field-input text-mono" placeholder="column_name"
+                    <input class="field-input text-figures" placeholder="column_name"
                            bind:value={composer.drops[i]} />
                     <button class="row-btn ghost" onclick={() => removeDrop(i)} aria-label="Remove">
                       <Trash2 size={11} />

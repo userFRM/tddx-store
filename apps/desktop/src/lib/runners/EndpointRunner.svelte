@@ -79,7 +79,7 @@
       <header class="head">
         <div class="title-block">
           <span class="text-caption">Run endpoint</span>
-          <h2 class="title text-mono">{r.endpoint.name}</h2>
+          <h2 class="title text-figures">{r.endpoint.name}</h2>
           <p class="sub fg-muted">{r.endpoint.description.split(".")[0]}.</p>
           <div class="meta tabnum">
             <span class="meta-pill">{r.endpoint.category}</span>
@@ -101,7 +101,7 @@
               <span class="ptype">· {p.param_type}</span>
             </span>
             <input
-              class="field-input text-mono"
+              class="field-input text-figures"
               placeholder={paramHint(p.param_type)}
               value={r.args[p.name] ?? ""}
               oninput={(e) => fieldChange(p.name, (e.target as HTMLInputElement).value)}

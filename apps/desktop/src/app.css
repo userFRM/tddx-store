@@ -79,15 +79,15 @@ a:focus-visible {
   line-height: 1.4;
   color: var(--fg-muted);
 }
-.text-mono {
+.text-figures {
   font-family: var(--font-mono);
-  font-size: var(--text-mono);
+  font-size: var(--text-figures);
   font-variant-numeric: tabular-nums;
   line-height: 1.4;
 }
 /* Column-aligned figures: counts, sizes, durations, percentages. Inter
    with tabular figures, because alignment is the requirement here and a
-   monospaced face is not. `.text-mono` stays mono for the things that
+   monospaced face is not. `.text-figures` stays mono for the things that
    are genuinely code-shaped — tickers, contract specs, paths, hashes. */
 .tabnum {
   font-family: var(--font-numeric);

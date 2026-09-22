@@ -236,13 +236,13 @@
           <div class="coverage-list">
             {#each coverage as cov (cov.symbol)}
               <div class="coverage-row">
-                <div class="cov-symbol text-mono">{cov.symbol}</div>
+                <div class="cov-symbol text-figures">{cov.symbol}</div>
                 <div class="cov-stats">
                   <span class="text-caption">{fmtNum(cov.files)} files</span>
                   <span class="cov-sep">·</span>
                   <span class="text-caption">{fmtBytes(cov.bytes)}</span>
                   <span class="cov-sep">·</span>
-                  <span class="text-caption text-mono">{cov.first ?? "—"} → {cov.last ?? "—"}</span>
+                  <span class="text-caption text-figures">{cov.first ?? "—"} → {cov.last ?? "—"}</span>
                 </div>
                 <button
                   class="btn btn-ghost cov-action"
@@ -471,7 +471,7 @@
 
   .field-name {
     font-family: var(--font-mono);
-    font-size: var(--text-mono);
+    font-size: var(--text-figures);
     color: var(--fg);
     background: var(--surface-2);
     padding: 1px var(--sp-2);
@@ -480,7 +480,7 @@
 
   .type-badge {
     font-family: var(--font-mono);
-    font-size: var(--text-mono);
+    font-size: var(--text-figures);
     font-variant-numeric: tabular-nums;
     font-weight: var(--weight-medium);
   }
