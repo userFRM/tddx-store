@@ -90,7 +90,7 @@
   .badge-icon {
     display: inline-flex;
     align-items: center;
-    color: var(--muted);
+    color: var(--fg-muted);
   }
   .pill {
     display: inline-flex;
@@ -101,7 +101,7 @@
     border: 1px solid transparent;
     font-variant-numeric: tabular-nums;
   }
-  .pill .pill-label { color: var(--muted); }
+  .pill .pill-label { color: var(--fg-muted); }
   .pill .pill-value { font-weight: 600; letter-spacing: 0.02em; }
   .upgrade-btn {
     display: inline-flex;

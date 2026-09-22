@@ -130,8 +130,12 @@ button { font-family: inherit; cursor: pointer; }
   color: var(--on-accent);
   font-weight: var(--weight-semi);
   border-color: transparent;
+  box-shadow: var(--accent-fill-edge);
 }
-.btn-primary:hover  { background: var(--accent-fill-hi); }
+.btn-primary:hover  {
+  background: var(--accent-fill-hi);
+  box-shadow: var(--accent-fill-edge), var(--accent-fill-glow);
+}
 .btn-primary:active { background: var(--accent-fill-hi); filter: brightness(0.94); }
 
 .btn-secondary {
@@ -235,6 +239,18 @@ input::placeholder { color: var(--fg-subtle); }
 .tier-standard { background: var(--tier-standard-bg); color: var(--tier-standard-fg); border-color: var(--tier-standard-border); }
 .tier-pro      { background: var(--tier-pro-bg);      color: var(--tier-pro-fg);      border-color: var(--tier-pro-border); }
 .tier-unknown  { background: var(--tier-free-bg);     color: var(--tier-free-fg);     border-color: var(--tier-free-border); }
+
+/* Inner label and value inherit the chip's own ink. They used to take a
+   global grey, which is invisible the moment a chip is filled. */
+.tier-free .tier-pill-label, .tier-value .tier-pill-label,
+.tier-standard .tier-pill-label, .tier-pro .tier-pill-label,
+.tier-unknown .tier-pill-label,
+.tier-free .pill-label, .tier-value .pill-label,
+.tier-standard .pill-label, .tier-pro .pill-label,
+.tier-unknown .pill-label {
+  color: inherit;
+  opacity: 0.78;
+}
 
 
 .pill-dot {

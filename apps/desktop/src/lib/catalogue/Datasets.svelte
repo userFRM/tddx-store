@@ -21,7 +21,7 @@
       </tr>
     {/each}
     {#if rows.length === 0}
-      <tr><td colspan="5" style="color: var(--fg-dim); text-align: center; padding: 24px;">
+      <tr><td colspan="5" style="color: var(--fg-subtle); text-align: center; padding: 24px;">
         No data yet. Queue a download from the sidebar.
       </td></tr>
     {/if}
@@ -29,5 +29,5 @@
 </table>
 
 <style>
-  code { font-family: var(--mono); font-size: 12px; color: var(--fg-dim); }
+  code { font-family: var(--font-mono); font-size: 12px; color: var(--fg-subtle); }
 </style>

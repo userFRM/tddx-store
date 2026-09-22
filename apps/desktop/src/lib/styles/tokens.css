@@ -45,10 +45,19 @@
   /* A filled surface and the ink that sits on it are a different job
      from a link. One token cannot serve both: a blue light enough to
      read as text on the canvas is too light to carry white text, and
-     vice versa. These are the fill side. */
-  --accent-fill:      linear-gradient(180deg, #1074FF 0%, #0057BE 100%);
-  --accent-fill-hi:   linear-gradient(180deg, #0B69E6 0%, #004AA3 100%);
-  --accent-fill-solid: #0063CC;
+     vice versa. These are the fill side.
+
+     The ramp runs the brand blue into indigo-violet, on a diagonal.
+     Both ends are chosen so white clears 4.5:1 across the whole sweep,
+     measured: 5.46 at the blue end, 7.10 at the midpoint, 7.91 at the
+     violet end. A flat fill was here before and read as a slab. */
+  --accent-fill:      linear-gradient(135deg, #0B63DD 0%, #5B23D6 100%);
+  --accent-fill-hi:   linear-gradient(135deg, #0D6FF0 0%, #6B2BEC 100%);
+  --accent-fill-solid: #2F45D8;
+  /* A top edge and a coloured drop, so a filled control reads as lit
+     rather than printed. */
+  --accent-fill-edge:  inset 0 1px 0 rgba(255, 255, 255, 0.20);
+  --accent-fill-glow:  0 4px 14px rgba(91, 35, 214, 0.28);
 
   /* The logo's own gradient. Identity only — active indicators, progress
      fills, decorative rules. Never behind text: at the cyan end, white
@@ -112,9 +121,9 @@
   --tier-standard-fg:     #0063CC;
   --tier-standard-border: rgba(16, 116, 255, 0.28);
   /* Pro is the only filled chip. That is the whole signal. */
-  --tier-pro-bg:          var(--accent-fill-solid);
+  --tier-pro-bg:          var(--accent-fill);
   --tier-pro-fg:          var(--on-accent);
-  --tier-pro-border:      var(--accent-fill-solid);
+  --tier-pro-border:      transparent;
 
   /* ── Typography ─────────────────────────────────────────── */
   --font-ui:        "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -233,10 +242,13 @@
   --accent-lo:      #1074FF;
   --accent-tint:    rgba(46, 134, 255, 0.14);
 
-  /* Fills go darker so white sits at 5.9:1 on them. */
-  --accent-fill:      linear-gradient(180deg, #1367DE 0%, #0B4FAE 100%);
-  --accent-fill-hi:   linear-gradient(180deg, #1A74F0 0%, #0F5AC4 100%);
-  --accent-fill-solid: #0B5FD0;
+  /* Same ramp as light; it already clears white contrast at both ends
+     and needs no separate dark variant. */
+  --accent-fill:      linear-gradient(135deg, #0B63DD 0%, #5B23D6 100%);
+  --accent-fill-hi:   linear-gradient(135deg, #1272F0 0%, #6B2BEC 100%);
+  --accent-fill-solid: #2F45D8;
+  --accent-fill-edge:  inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  --accent-fill-glow:  0 4px 18px rgba(91, 35, 214, 0.40);
 
   --brand-gradient: linear-gradient(90deg, #1074FF 0%, #00D4FF 100%);
 
@@ -278,9 +290,9 @@
   --tier-standard-bg:     rgba(46, 134, 255, 0.16);
   --tier-standard-fg:     #5BA3FF;
   --tier-standard-border: rgba(46, 134, 255, 0.30);
-  --tier-pro-bg:          var(--accent-fill-solid);
+  --tier-pro-bg:          var(--accent-fill);
   --tier-pro-fg:          #FFFFFF;
-  --tier-pro-border:      var(--accent-fill-solid);
+  --tier-pro-border:      transparent;
 
   --shadow-flat:         0 0 0 1px rgba(0, 0, 0, 0.25);
   --shadow-raised:       0 1px 2px rgba(0, 0, 0, 0.45),

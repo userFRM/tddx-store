@@ -468,7 +468,7 @@
   .rail-badge {
     margin-left: auto;
     font-size: var(--text-caption);
-    background: var(--accent-fill-solid);
+    background: var(--accent-fill);
     color: var(--on-accent);
     padding: 1px 6px;
     border-radius: var(--r-pill);

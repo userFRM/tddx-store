@@ -12,7 +12,7 @@
   onDestroy(() => clearInterval(timer));
 
   const cards = [
-    { k: "pending", color: "var(--fg-dim)" },
+    { k: "pending", color: "var(--fg-subtle)" },
     { k: "running", color: "var(--accent-hi)" },
     { k: "done", color: "var(--good)" },
     { k: "failed", color: "var(--bad)" },
@@ -59,10 +59,10 @@
     display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-bottom: 14px;
   }
   .cards .card .k {
-    color: var(--fg-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+    color: var(--fg-subtle); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
   }
   .cards .card .v {
-    font-size: 22px; font-weight: 600; font-family: var(--mono); margin-top: 4px;
+    font-size: 22px; font-weight: 600; font-family: var(--font-mono); margin-top: 4px;
   }
-  code { font-family: var(--mono); font-size: 12px; color: var(--fg-dim); }
+  code { font-family: var(--font-mono); font-size: 12px; color: var(--fg-subtle); }
 </style>
