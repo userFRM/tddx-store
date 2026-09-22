@@ -94,33 +94,32 @@ pub async fn enqueue(state: State<'_, Arc<AppState>>, args: EnqueueArgs) -> Resu
     // still live during the requested window are worth asking for; an
     // expiration that had already passed has nothing to report.
     let requested_expiration = args.expiration.clone().unwrap_or_else(|| "*".into());
-    let expirations: Vec<String> = if kind.rejects_expiration_wildcard()
-        && is_wildcard(&requested_expiration)
-    {
-        let client_guard = state.client.read().await;
-        let client = client_guard.as_ref().ok_or("client not connected")?.clone();
-        drop(client_guard);
-        let window_start = units.iter().map(|(d, _)| *d).min();
-        let all = client
-            .option_expirations(&args.symbol)
-            .await
-            .map_err(|e| e.to_string())?;
-        let live: Vec<String> = all
-            .into_iter()
-            .filter(|e| window_start.is_none_or(|start| *e >= start))
-            .map(|e| e.format("%Y%m%d").to_string())
-            .collect();
-        if live.is_empty() {
-            return Err(format!(
+    let expirations: Vec<String> =
+        if kind.rejects_expiration_wildcard() && is_wildcard(&requested_expiration) {
+            let client_guard = state.client.read().await;
+            let client = client_guard.as_ref().ok_or("client not connected")?.clone();
+            drop(client_guard);
+            let window_start = units.iter().map(|(d, _)| *d).min();
+            let all = client
+                .option_expirations(&args.symbol)
+                .await
+                .map_err(|e| e.to_string())?;
+            let live: Vec<String> = all
+                .into_iter()
+                .filter(|e| window_start.is_none_or(|start| *e >= start))
+                .map(|e| e.format("%Y%m%d").to_string())
+                .collect();
+            if live.is_empty() {
+                return Err(format!(
                 "{} needs a specific expiration and {} has none on or after the requested window",
                 kind.as_str(),
                 args.symbol
             ));
-        }
-        live
-    } else {
-        vec![requested_expiration]
-    };
+            }
+            live
+        } else {
+            vec![requested_expiration]
+        };
 
     let priority = args.priority.unwrap_or(0);
     let mut queued = 0usize;
