@@ -8,11 +8,13 @@
     Plus,
     ArrowRight,
     Library,
+    Diff,
   } from "lucide-svelte";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { api, fmtBytes, fmtNum, type Coverage } from "$lib/api";
-  import { app, navigate, log, composer } from "$lib/stores/app.svelte";
+  import { app, navigate, log, composer, refreshQueueSnapshot } from "$lib/stores/app.svelte";
   import { onMount } from "svelte";
+  import CoverageDiff from "$lib/queue/CoverageDiff.svelte";
 
   type SortKey = "symbol" | "size" | "files" | "recent";
 
@@ -39,6 +41,7 @@
     rowMsg = `Checking ${row.symbol} ${row.kind}…`;
     try {
       const n = await api.requeueMissingDates(row.kind, row.symbol);
+      await refreshQueueSnapshot();
       rowMsg =
         n === 0
           ? `${row.symbol} ${row.kind} has no gaps`
@@ -60,6 +63,10 @@
       setTimeout(() => (rowMsg = ""), 3000);
     }
   }
+  /** "What landed since I last looked" — a snapshot diff over the
+   *  same coverage rows, opened on demand so it costs nothing when
+   *  closed. */
+  let showDiff = $state(false);
   let filterQuery = $state("");
   let expandedSymbols = $state<Set<string>>(new Set());
 
@@ -301,6 +308,17 @@
         </button>
       {/if}
 
+      <button
+        class="btn btn-ghost"
+        class:active={showDiff}
+        onclick={() => (showDiff = !showDiff)}
+        aria-pressed={showDiff}
+        title="Compare the library against a saved snapshot"
+      >
+        <Diff size={14} strokeWidth={1.75} aria-hidden="true" />
+        Changes
+      </button>
+
       <label class="sort-control">
         <span class="sr-only">Sort by</span>
         <select class="sort-select" bind:value={sortKey} aria-label="Sort by">
@@ -322,6 +340,10 @@
       </div>
     </div>
   </div>
+
+  {#if showDiff}
+    <div class="diff-panel"><CoverageDiff /></div>
+  {/if}
 
   <!-- Content -->
   <div class="lib-body">
@@ -633,6 +655,14 @@
     white-space: nowrap;
   }
 
+  .diff-panel {
+    border-bottom: 1px solid var(--border);
+    padding: 0 var(--space-6) var(--space-4);
+  }
+  .btn-ghost.active {
+    color: var(--accent);
+    background: var(--surface-2);
+  }
   .lib-header {
     display: flex;
     align-items: center;

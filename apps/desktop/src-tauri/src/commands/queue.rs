@@ -31,6 +31,11 @@ pub struct EnqueueArgs {
     pub priority: Option<i32>,
     #[serde(default)]
     pub transforms: Option<tdds_core::Transforms>,
+    /// Any other registry parameter the endpoint declares — `max_dte`,
+    /// `strike_range`, `start_time`, the greeks inputs. Keys the
+    /// endpoint does not declare are ignored downstream.
+    #[serde(default)]
+    pub extra: Option<std::collections::BTreeMap<String, String>>,
 }
 
 #[tauri::command]
@@ -71,6 +76,7 @@ pub async fn enqueue(state: State<'_, Arc<AppState>>, args: EnqueueArgs) -> Resu
             strike: args.strike.clone().unwrap_or_else(|| "*".into()),
             right: args.right.clone().unwrap_or_else(|| "both".into()),
             transforms: args.transforms.clone().unwrap_or_default(),
+            extra: args.extra.clone().unwrap_or_default(),
         };
         queue
             .enqueue(spec, format, &cfg.output_dir, priority)

@@ -24,7 +24,7 @@
   import SmartFilters from "$lib/catalogue/SmartFilters.svelte";
   import ParamForm from "$lib/catalogue/ParamForm.svelte";
   import { api, type EnqueueArgs } from "$lib/api";
-  import { app, tierForKind, log, type AssetClass } from "$lib/stores/app.svelte";
+  import { app, tierForKind, log, type AssetClass, refreshQueueSnapshot } from "$lib/stores/app.svelte";
   import { saveSearch } from "$lib/persistence/savedSearches";
   import { openUrl } from "@tauri-apps/plugin-opener";
 
@@ -214,6 +214,28 @@
     };
   }
 
+  // Params that map onto a dedicated `EnqueueArgs` field. Everything
+  // else the user filled in — `max_dte`, `strike_range`, `start_time`,
+  // `venue`, the greeks inputs — travels in `extra` and is applied to
+  // whichever of them the endpoint declares. Before this, the form
+  // collected those values and the queue dropped them on the floor.
+  const SPEC_FIELD_PARAMS = new Set([
+    "symbol", "root", "date", "start_date", "end_date",
+    "interval", "expiration", "strike", "right", "request_type",
+  ]);
+
+  function extraArgs(): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const p of selectedParams) {
+      if (SPEC_FIELD_PARAMS.has(p.name)) continue;
+      const v = paramValues[p.name];
+      if (v !== undefined && v !== null && String(v).trim() !== "") {
+        out[p.name] = String(v);
+      }
+    }
+    return out;
+  }
+
   async function queueDownload() {
     if (!readyToQueue || queueStatus === "queuing") return;
     queueStatus = "queuing";
@@ -234,15 +256,12 @@
           start: start || null,
           end: end || null,
           expiration: isOption ? (paramValues["expiration"] ?? null) : null,
-          strike: isOption
-            ? (paramValues["strike_filter_low"] && paramValues["strike_filter_high"]
-                ? `${paramValues["strike_filter_low"]}-${paramValues["strike_filter_high"]}`
-                : (paramValues["strike"] ?? null))
-            : null,
+          strike: isOption ? (paramValues["strike"] ?? null) : null,
           right:
             isOption && paramValues["right"] !== "both"
               ? (paramValues["right"] ?? null)
               : null,
+          extra: extraArgs(),
         };
         const n = await api.enqueue(args);
         totalTasks += n;
@@ -250,6 +269,10 @@
         if (!firstErr) firstErr = e instanceof Error ? e.message : String(e);
       }
     }
+
+    // The snapshot poll backs off when the queue is idle, so an
+    // enqueue has to announce itself or the pane lags behind the click.
+    await refreshQueueSnapshot();
 
     if (firstErr && totalTasks === 0) {
       queueStatus = "error";
@@ -294,6 +317,7 @@
             isOption && paramValues["right"] && paramValues["right"] !== "both"
               ? (paramValues["right"] ?? null)
               : null,
+          extra: extraArgs(),
         };
         const n = await api.enqueue(args);
         totalTasks += n;
@@ -301,6 +325,7 @@
         /* fail-silent — UI shows generic queue summary */
       }
     }
+    await refreshQueueSnapshot();
     log("info", `Cross-sell: queued ${totalTasks} ${suggestion.kind} tasks`);
     suggestion = null;
   }

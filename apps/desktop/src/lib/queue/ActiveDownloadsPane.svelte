@@ -20,7 +20,7 @@
     ChevronRight,
     ChevronLeft,
   } from "lucide-svelte";
-  import { app } from "$lib/stores/app.svelte";
+  import { app, log, refreshQueueSnapshot } from "$lib/stores/app.svelte";
   import { api, fmtBytes, fmtNum, type TaskView } from "$lib/api";
 
   // ── Throughput estimator (rolling, from successive snapshots) ─────
@@ -121,11 +121,36 @@
 
   onDestroy(stopTick);
 
+  // Both of these can fail for reasons the user can act on — not
+  // connected, queue db locked, no failed rows — so the failure has to
+  // reach them. Swallowing it left the button looking broken.
+  let busy = $state(false);
   async function startWorkers() {
-    try { await api.runQueue(); } catch {}
+    busy = true;
+    try {
+      await api.runQueue();
+      await refreshQueueSnapshot();
+      log("info", "Workers started");
+    } catch (e) {
+      log("error", `Could not start workers: ${errText(e)}`);
+    } finally {
+      busy = false;
+    }
   }
   async function retryFailed() {
-    try { await api.requeueFailed(); } catch {}
+    busy = true;
+    try {
+      const n = await api.requeueFailed();
+      await refreshQueueSnapshot();
+      log("info", n > 0 ? `Requeued ${n} failed task${n === 1 ? "" : "s"}` : "Nothing to retry");
+    } catch (e) {
+      log("error", `Could not retry failed tasks: ${errText(e)}`);
+    } finally {
+      busy = false;
+    }
+  }
+  function errText(e: unknown): string {
+    return e instanceof Error ? e.message : String(e);
   }
 
   // ── Visibility + collapse state ─────────────────────────────────
@@ -162,12 +187,12 @@
       <span class="text-caption">Downloads</span>
       <div class="pane-actions">
         {#if pending > 0 && running.length === 0}
-          <button class="btn-icon" onclick={startWorkers} title="Start workers">
+          <button class="btn-icon" onclick={startWorkers} disabled={busy} title="Start workers">
             <Play size={14} />
           </button>
         {/if}
         {#if failed > 0}
-          <button class="btn-icon" onclick={retryFailed} title="Retry failed">
+          <button class="btn-icon" onclick={retryFailed} disabled={busy} title="Retry failed">
             <RotateCcw size={14} />
           </button>
         {/if}
@@ -250,7 +275,7 @@
         <div class="empty-active">
           <Pause size={20} />
           <p class="text-body-sm fg-muted">{fmtNum(pending)} queued — workers idle.</p>
-          <button class="btn btn-primary" onclick={startWorkers}>
+          <button class="btn btn-primary" onclick={startWorkers} disabled={busy}>
             <Play size={14} fill="currentColor" />
             Start
           </button>
@@ -277,7 +302,7 @@
       <section class="section">
         <div class="section-header">
           <span class="text-caption">Failed</span>
-          <button class="btn-icon" onclick={retryFailed} title="Retry all failed">
+          <button class="btn-icon" onclick={retryFailed} disabled={busy} title="Retry all failed">
             <RotateCcw size={12} />
           </button>
         </div>

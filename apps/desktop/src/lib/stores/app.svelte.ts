@@ -545,21 +545,74 @@ export function openDetail(d: DatasetMeta) {
 }
 
 // ── Queue polling ────────────────────────────────────────────
-let _pollTimer: ReturnType<typeof setInterval> | null = null;
+//
+// Adaptive, because a fixed 1.5s poll of a 500-row snapshot plus a
+// disk walk is real work to do forever in an app that is idle almost
+// all of the time. Three rates:
+//
+//   ACTIVE  something is running or pending — the user is watching
+//           progress bars, so stay responsive
+//   IDLE    queue is drained; poll only to notice work arriving from
+//           a schedule tick or a second window
+//   HIDDEN  window is not on screen; nobody can see the result
+//
+// Self-scheduling `setTimeout` rather than `setInterval` so the rate
+// can change between ticks, and so a slow snapshot cannot stack up
+// overlapping calls the way a fixed interval can.
+const POLL_ACTIVE_MS = 1500;
+const POLL_IDLE_MS = 8000;
+const POLL_HIDDEN_MS = 30000;
+
+let _pollTimer: ReturnType<typeof setTimeout> | null = null;
+let _pollRunning = false;
 
 export function startQueuePoll() {
-  if (_pollTimer !== null) return;
+  if (_pollRunning) return;
+  _pollRunning = true;
   app.queuePollActive = true;
-  _pollOnce();
-  _pollTimer = setInterval(_pollOnce, 1500);
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", _onVisibility);
+  }
+  void _pollLoop();
 }
 
 export function stopQueuePoll() {
+  _pollRunning = false;
   if (_pollTimer !== null) {
-    clearInterval(_pollTimer);
+    clearTimeout(_pollTimer);
     _pollTimer = null;
   }
+  if (typeof document !== "undefined") {
+    document.removeEventListener("visibilitychange", _onVisibility);
+  }
   app.queuePollActive = false;
+}
+
+/** Coming back to the window should show current state immediately,
+ *  not up to `POLL_HIDDEN_MS` later. */
+function _onVisibility() {
+  if (!_pollRunning || document.visibilityState !== "visible") return;
+  if (_pollTimer !== null) clearTimeout(_pollTimer);
+  void _pollLoop();
+}
+
+async function _pollLoop() {
+  if (!_pollRunning) return;
+  await _pollOnce();
+  if (!_pollRunning) return;
+  _pollTimer = setTimeout(() => void _pollLoop(), _pollDelay());
+}
+
+function _pollDelay(): number {
+  if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+    return POLL_HIDDEN_MS;
+  }
+  return _queueBusy() ? POLL_ACTIVE_MS : POLL_IDLE_MS;
+}
+
+function _queueBusy(): boolean {
+  const counts = app.queueSnap?.counts ?? [];
+  return counts.some(([status, n]) => n > 0 && (status === "running" || status === "pending"));
 }
 
 async function _pollOnce() {

@@ -118,6 +118,21 @@ pub struct DataSpec {
     /// Post-decode transforms applied before write (rename / drop / scale).
     #[serde(default)]
     pub transforms: crate::Transforms,
+    /// Every other endpoint parameter, by registry name.
+    ///
+    /// The six fields above are the ones a work unit is *keyed* on —
+    /// they decide what the file is called and how coverage groups it.
+    /// But endpoints declare far more than six: `max_dte`,
+    /// `strike_range`, `start_time`/`end_time`, `venue`, the greeks
+    /// inputs (`rate_type`, `annual_dividend`, `version`, …). Those are
+    /// request options rather than identity, so they live here as
+    /// registry-named strings and are applied in
+    /// [`Self::to_endpoint_spec`] to whichever of them the endpoint
+    /// actually declares. A key the endpoint does not declare is
+    /// ignored rather than rejected, which is what lets one saved
+    /// preset carry across related endpoints.
+    #[serde(default)]
+    pub extra: BTreeMap<String, String>,
 }
 
 fn default_expiration() -> String {
@@ -162,6 +177,15 @@ impl DataSpec {
                 parts.push(sanitize(&normalized));
             }
         }
+        // Same reasoning as the fields above: a pull narrowed by
+        // `strike_range=5` is not the same data as the unrestricted
+        // one, so it cannot share a filename with it.
+        for (k, v) in &self.extra {
+            if v.is_empty() || v == "*" {
+                continue;
+            }
+            parts.push(format!("{}-{}", sanitize(k), sanitize(v)));
+        }
         parts.join("_")
     }
 
@@ -205,7 +229,7 @@ impl DataSpec {
                 "strike" => Some(self.strike.clone()),
                 "right" => Some(self.right.clone()),
                 "interval" => self.interval.clone(),
-                _ => None,
+                other => self.extra.get(other).cloned(),
             };
             if let Some(v) = value {
                 spec = spec.arg(p.name, v);
@@ -370,6 +394,72 @@ mod tests {
     /// Two pulls that differ only by contract filter must not write to
     /// the same file. Before this, the second one found the first one's
     /// file already there and reported done without fetching anything.
+    fn option_spec() -> DataSpec {
+        DataSpec {
+            kind: DataKind::parse("option_history_quote").expect("known dataset"),
+            symbol: "SPXW".into(),
+            date: NaiveDate::from_ymd_opt(2026, 9, 21).unwrap(),
+            interval: None,
+            expiration: "*".into(),
+            strike: "*".into(),
+            right: "both".into(),
+            transforms: crate::Transforms::default(),
+            extra: BTreeMap::new(),
+        }
+    }
+
+    /// `strike_range`, `max_dte`, `start_time` and the greeks inputs are
+    /// real declared parameters that the UI collects. They used to stop
+    /// at the queue: `to_endpoint_spec` filled six names and dropped
+    /// everything else, so a user who asked for 5 strikes around spot
+    /// silently downloaded the whole chain.
+    #[test]
+    fn extra_args_reach_the_endpoint_when_it_declares_them() {
+        let mut spec = option_spec();
+        spec.extra.insert("strike_range".into(), "5".into());
+        spec.extra.insert("max_dte".into(), "30".into());
+
+        let lowered = spec.to_endpoint_spec();
+        assert_eq!(
+            lowered.args.get("strike_range").map(String::as_str),
+            Some("5")
+        );
+        assert_eq!(lowered.args.get("max_dte").map(String::as_str), Some("30"));
+    }
+
+    /// An endpoint that does not declare the parameter must not receive
+    /// it — `insert_raw` would reject the unknown name and fail the
+    /// whole task. This is what lets one saved preset carry across
+    /// related endpoints.
+    #[test]
+    fn extra_args_the_endpoint_does_not_declare_are_dropped() {
+        let mut spec = option_spec();
+        spec.kind = DataKind::parse("stock_history_trade").expect("known dataset");
+        spec.extra.insert("strike_range".into(), "5".into());
+
+        let lowered = spec.to_endpoint_spec();
+        assert!(
+            !lowered.args.contains_key("strike_range"),
+            "stock_history_trade has no strike_range param"
+        );
+    }
+
+    /// Narrowing by an extra arg produces different data, so it must
+    /// produce a different file — same reasoning as the expiration and
+    /// strike qualifiers.
+    #[test]
+    fn extra_args_change_the_filename() {
+        let plain = option_spec();
+        let mut narrowed = option_spec();
+        narrowed.extra.insert("strike_range".into(), "5".into());
+
+        assert_ne!(plain.file_stem(), narrowed.file_stem());
+        assert!(
+            narrowed.file_stem().ends_with("_20260921"),
+            "date stays last"
+        );
+    }
+
     #[test]
     fn narrowed_pulls_get_distinct_filenames() {
         let base = DataSpec {
@@ -381,6 +471,7 @@ mod tests {
             strike: "*".into(),
             right: "both".into(),
             transforms: crate::Transforms::default(),
+            extra: BTreeMap::new(),
         };
 
         // The whole-chain default keeps the historical name, so an
@@ -422,6 +513,7 @@ mod tests {
             strike: "5400.5".into(),
             right: "call".into(),
             transforms: crate::Transforms::default(),
+            extra: BTreeMap::new(),
         };
         let stem = spec.file_stem();
         assert!(stem.ends_with("_20260921"), "date must be last: {stem}");

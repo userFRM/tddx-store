@@ -17,7 +17,7 @@
   } from "lucide-svelte";
   import { ArrowUpRight, Lock } from "lucide-svelte";
   import { api, type EnqueueArgs, type Transforms } from "$lib/api";
-  import { composer, closeComposer, app, tierForKind } from "$lib/stores/app.svelte";
+  import { composer, closeComposer, app, tierForKind, refreshQueueSnapshot } from "$lib/stores/app.svelte";
   import SymbolPicker from "$lib/composer/SymbolPicker.svelte";
   import DateRangeSlider from "$lib/composer/DateRangeSlider.svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
@@ -168,6 +168,9 @@
         if (!firstErr) firstErr = e instanceof Error ? e.message : String(e);
       }
     }
+    // The snapshot poll backs off when the queue is idle, so an
+    // enqueue has to announce itself or the pane lags behind the click.
+    await refreshQueueSnapshot();
     if (firstErr && totalTasks === 0) {
       composer.status = "error";
       composer.msg = firstErr;

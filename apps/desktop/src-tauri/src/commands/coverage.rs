@@ -122,6 +122,7 @@ pub async fn requeue_missing_dates(
             strike: "*".into(),
             right: "both".into(),
             transforms: Default::default(),
+            extra: Default::default(),
         };
         queue
             .enqueue(spec, format, &cfg.output_dir, 0)

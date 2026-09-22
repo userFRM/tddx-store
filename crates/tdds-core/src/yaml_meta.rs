@@ -66,3 +66,31 @@ pub fn install_runtime_meta(map: HashMap<String, EndpointMeta>) {
         *guard = Some(map);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The desktop Browse catalogue inner-joins the SDK endpoint
+    /// registry against this table on `operation_id`, and silently
+    /// drops anything that misses. A registry endpoint with no entry
+    /// here would therefore vanish from the UI with no error — the
+    /// user simply could not download it. Assert the join is total.
+    #[test]
+    fn every_registry_endpoint_has_catalogue_metadata() {
+        let have: HashMap<&str, ()> = ENDPOINT_META_TABLE
+            .iter()
+            .map(|&(op, ..)| (op, ()))
+            .collect();
+        let missing: Vec<&str> = thetadatadx::ENDPOINTS
+            .iter()
+            .map(|m| m.name)
+            .filter(|n| !have.contains_key(n))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "{} registry endpoint(s) would disappear from Browse: {missing:?}",
+            missing.len()
+        );
+    }
+}

@@ -97,6 +97,11 @@ export type EnqueueArgs = {
   right?: string | null;
   priority?: number | null;
   transforms?: Transforms | null;
+  /** Any other parameter the endpoint declares — `max_dte`,
+   *  `strike_range`, `start_time`, the greeks inputs. Keyed by registry
+   *  param name; keys the endpoint does not declare are dropped when
+   *  the task is lowered onto a request, not rejected. */
+  extra?: Record<string, string> | null;
 };
 
 export type EndpointParam = {

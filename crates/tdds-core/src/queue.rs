@@ -87,6 +87,7 @@ impl Queue {
                 rows        INTEGER,
                 bytes       INTEGER,
                 transforms_json   TEXT,
+                extra_json        TEXT,
                 claimed_by        TEXT,
                 claimed_at        INTEGER,
                 last_heartbeat_at INTEGER
@@ -100,6 +101,7 @@ impl Queue {
         // (locked DB, corruption, permission denial) propagates.
         Self::add_column_if_missing(pool, "ALTER TABLE tasks ADD COLUMN transforms_json TEXT")
             .await?;
+        Self::add_column_if_missing(pool, "ALTER TABLE tasks ADD COLUMN extra_json TEXT").await?;
         Self::add_column_if_missing(pool, "ALTER TABLE tasks ADD COLUMN claimed_by TEXT").await?;
         Self::add_column_if_missing(pool, "ALTER TABLE tasks ADD COLUMN claimed_at INTEGER")
             .await?;
@@ -152,10 +154,16 @@ impl Queue {
         } else {
             Some(serde_json::to_string(&spec.transforms)?)
         };
+        let extra_json = if spec.extra.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&spec.extra)?)
+        };
         sqlx::query(
             r#"INSERT INTO tasks (id, kind, symbol, date, interval, expiration, strike, right_,
-                format, output_dir, status, priority, attempts, created_at, transforms_json)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)"#,
+                format, output_dir, status, priority, attempts, created_at, transforms_json,
+                extra_json)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)"#,
         )
         .bind(&id)
         .bind(spec.kind.as_str())
@@ -171,6 +179,7 @@ impl Queue {
         .bind(priority)
         .bind(now)
         .bind(transforms_json)
+        .bind(extra_json)
         .execute(&self.pool)
         .await?;
         Ok(id)
@@ -581,6 +590,10 @@ struct TaskRow {
     /// JSON-serialised `Transforms` blob. Optional column added in v0.1.1.
     #[sqlx(default)]
     transforms_json: Option<String>,
+    /// JSON-serialised `DataSpec::extra` map. Optional column added in
+    /// v0.1.2 — rows written before it read back as no extra args.
+    #[sqlx(default)]
+    extra_json: Option<String>,
 }
 
 impl TryFrom<TaskRow> for Task {
@@ -606,6 +619,11 @@ impl TryFrom<TaskRow> for Task {
                 right: r.right_,
                 transforms: r
                     .transforms_json
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str(s).ok())
+                    .unwrap_or_default(),
+                extra: r
+                    .extra_json
                     .as_deref()
                     .and_then(|s| serde_json::from_str(s).ok())
                     .unwrap_or_default(),
@@ -640,6 +658,7 @@ mod tests {
             strike: "*".into(),
             right: "both".into(),
             transforms: crate::Transforms::default(),
+            extra: Default::default(),
         }
     }
 
@@ -980,6 +999,7 @@ mod tests {
                 rows              INTEGER,
                 bytes             INTEGER,
                 transforms_json   TEXT,
+                extra_json        TEXT,
                 claimed_by        TEXT,
                 claimed_at        INTEGER,
                 last_heartbeat_at INTEGER

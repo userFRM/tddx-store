@@ -153,6 +153,7 @@ async fn main() -> anyhow::Result<()> {
                     strike: strike.clone(),
                     right: right.clone(),
                     transforms: Default::default(),
+                    extra: Default::default(),
                 };
                 let id = queue
                     .enqueue(spec, format, &cli.out.to_string_lossy(), priority)

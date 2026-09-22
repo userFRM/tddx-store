@@ -11,6 +11,8 @@
   import { onMount } from "svelte";
   import { X, Loader2, Download, ChevronLeft, ChevronRight } from "lucide-svelte";
   import { api, fmtBytes, fmtNum, type PreviewResult } from "$lib/api";
+  import IconBid from "$lib/icons/IconBid.svelte";
+  import IconAsk from "$lib/icons/IconAsk.svelte";
   import { app } from "$lib/stores/app.svelte";
 
   let {
@@ -47,6 +49,15 @@
     if (typeof v === "number") return v.toLocaleString();
     if (typeof v === "string" && v.length > 64) return v.slice(0, 64) + "…";
     return String(v);
+  }
+
+  /** A quote schema is 27 columns wide; marking which side each one
+   *  belongs to is the difference between scanning and counting. */
+  function side(name: string): "bid" | "ask" | null {
+    const n = name.toLowerCase();
+    if (n.startsWith("bid")) return "bid";
+    if (n.startsWith("ask")) return "ask";
+    return null;
   }
 
   function isNumeric(dtype: string): boolean {
@@ -99,7 +110,11 @@
               <thead><tr>
                 {#each result.schema as col}
                   <th class={isNumeric(col.dtype) ? "num" : ""}>
-                    <span class="col-name">{col.name}</span>
+                    <span class="col-name">
+                      {#if side(col.name) === "bid"}<IconBid size={12} />{/if}
+                      {#if side(col.name) === "ask"}<IconAsk size={12} />{/if}
+                      {col.name}
+                    </span>
                     <span class="col-type text-caption">{col.dtype.replace(/^[A-Z]+\(/, "").replace(/\)$/, "")}</span>
                   </th>
                 {/each}
@@ -227,6 +242,9 @@
   }
   .grid th.num { text-align: right; }
   .col-name { display: block; color: var(--fg); }
+  /* Inline, not flex: `th.num` right-aligns via text-align, which a
+     flex container would ignore. */
+  .col-name :global(svg) { vertical-align: -2px; margin-right: 3px; }
   .col-type { display: block; color: var(--fg-subtle); margin-top: 1px; }
 
   .grid td {

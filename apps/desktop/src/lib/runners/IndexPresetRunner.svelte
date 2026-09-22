@@ -6,7 +6,7 @@
    * date) pair.
    */
   import { X, Loader2, Layers, ChevronRight } from "lucide-svelte";
-  import { app, closeIndexPreset, log } from "$lib/stores/app.svelte";
+  import { app, closeIndexPreset, log, refreshQueueSnapshot } from "$lib/stores/app.svelte";
   import { api, TAURI_AVAILABLE } from "$lib/api";
 
   let symbols = $state<string[]>([]);
@@ -77,6 +77,7 @@
         if (!firstErr) firstErr = e instanceof Error ? e.message : String(e);
       }
     }
+    await refreshQueueSnapshot();
     busy = false;
     if (firstErr && total === 0) {
       msg = firstErr;

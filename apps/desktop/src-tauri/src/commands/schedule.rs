@@ -146,6 +146,7 @@ async fn tick(state: &AppState) -> Result<(), String> {
             strike: "*".into(),
             right: "both".into(),
             transforms: Default::default(),
+            extra: Default::default(),
         };
         match queue.enqueue(spec, row.format, &output_dir, 0).await {
             Ok(_) => {
