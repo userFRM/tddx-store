@@ -11,12 +11,23 @@
   } from "lucide-svelte";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { api, fmtBytes, fmtNum, type Coverage } from "$lib/api";
-  import { app, navigate, log } from "$lib/stores/app.svelte";
+  import { app, navigate, log, composer } from "$lib/stores/app.svelte";
   import { onMount } from "svelte";
+
+  type SortKey = "symbol" | "size" | "files" | "recent";
+
+  const SORT_LABELS: Record<SortKey, string> = {
+    symbol: "Symbol A-Z",
+    size: "Largest first",
+    files: "Most files",
+    recent: "Most recent",
+  };
 
   let coverage = $state<Coverage[]>([]);
   let loading = $state(true);
   let rowMsg = $state("");
+  let sortKey = $state<SortKey>("symbol");
+  let busy = $state(false);
 
   /** Queue every trading day missing from a set's own span. */
   async function refillGaps(row: Coverage) {
@@ -57,17 +68,97 @@
     }
   });
 
-  // Group coverage by symbol
-  const grouped = $derived(() => {
-    const q = filterQuery.trim().toUpperCase();
+  // Group by symbol, filtering on the symbol AND the dataset, because
+  // "show me everything with greeks" is as common a question as
+  // "show me everything for QQQ".
+  const grouped = $derived.by<[string, Coverage[]][]>(() => {
+    const q = filterQuery.trim().toLowerCase();
     const map = new Map<string, Coverage[]>();
     for (const row of coverage) {
-      if (q && !row.symbol.toUpperCase().includes(q)) continue;
+      if (
+        q &&
+        !row.symbol.toLowerCase().includes(q) &&
+        !row.kind.toLowerCase().includes(q) &&
+        !kindLabel(row.kind).toLowerCase().includes(q)
+      ) {
+        continue;
+      }
       if (!map.has(row.symbol)) map.set(row.symbol, []);
       map.get(row.symbol)!.push(row);
     }
-    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    const groups = Array.from(map.entries());
+    groups.sort(([aSym, aRows], [bSym, bRows]) => {
+      switch (sortKey) {
+        case "size":
+          return symbolTotalBytes(bRows) - symbolTotalBytes(aRows);
+        case "files":
+          return symbolTotalFiles(bRows) - symbolTotalFiles(aRows);
+        case "recent":
+          return (lastDate(bRows) ?? "").localeCompare(lastDate(aRows) ?? "");
+        default:
+          return aSym.localeCompare(bSym);
+      }
+    });
+    return groups;
   });
+
+  const allExpanded = $derived(
+    grouped.length > 0 && grouped.every(([sym]) => expandedSymbols.has(sym)),
+  );
+
+  function toggleAll() {
+    expandedSymbols = allExpanded
+      ? new Set()
+      : new Set(grouped.map(([sym]) => sym));
+  }
+
+  function lastDate(rows: Coverage[]): string | null {
+    return rows.map((r) => r.last).filter(Boolean).sort().pop() ?? null;
+  }
+
+  /** Trading days inside a set's own span that are not on disk. Weekends
+   *  and holidays are not gaps, so this only counts weekdays and still
+   *  overstates around market holidays — the exact figure needs the
+   *  server's calendar, which is what the refill call fetches. */
+  function approxGaps(row: Coverage): number {
+    if (!row.first || !row.last) return 0;
+    const have = new Set(row.dates);
+    let weekdays = 0;
+    const cursor = new Date(row.first);
+    const end = new Date(row.last);
+    while (cursor <= end) {
+      const dow = cursor.getUTCDay();
+      if (dow !== 0 && dow !== 6 && !have.has(cursor.toISOString().slice(0, 10))) {
+        weekdays += 1;
+      }
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+    return weekdays;
+  }
+
+  /** Fill gaps across every dataset held for one symbol. */
+  async function refillSymbol(symbol: string, rows: Coverage[]) {
+    if (busy) return;
+    busy = true;
+    rowMsg = `Checking ${symbol}…`;
+    try {
+      let queued = 0;
+      for (const row of rows) {
+        queued += await api.requeueMissingDates(row.kind, row.symbol);
+      }
+      rowMsg =
+        queued === 0
+          ? `${symbol} has no gaps`
+          : `Queued ${queued} missing day${queued === 1 ? "" : "s"} for ${symbol}`;
+      log("info", rowMsg);
+    } catch (e: unknown) {
+      rowMsg = e instanceof Error ? e.message : String(e);
+      log("error", `Refill failed: ${rowMsg}`);
+    } finally {
+      busy = false;
+      setTimeout(() => (rowMsg = ""), 3000);
+    }
+  }
 
   function toggleSymbol(symbol: string) {
     const s = new Set(expandedSymbols);
@@ -103,16 +194,16 @@
   // Show catalogue entries that have no coverage rows
   const downloadedKinds = $derived(new Set(coverage.map((r) => r.kind)));
 
-  const neverDownloaded = $derived(() => {
+  const neverDownloaded = $derived.by(() => {
     if (app.catalogue.length === 0) return [];
     return app.catalogue.filter((e) => !downloadedKinds.has(e.name));
   });
 
   // Group never-downloaded by category
-  const neverByCategory = $derived(() => {
+  const neverByCategory = $derived.by(() => {
     const order: string[] = [];
     const map = new Map<string, typeof app.catalogue>();
-    for (const e of neverDownloaded()) {
+    for (const e of neverDownloaded) {
       const cat = e.category.charAt(0).toUpperCase() + e.category.slice(1);
       if (!map.has(cat)) { map.set(cat, []); order.push(cat); }
       map.get(cat)!.push(e);
@@ -122,8 +213,10 @@
 
   let neverOpen = $state(false);
 
-  function browseTo(operationId: string) {
-    // Navigate to browse — the user will select the kind manually for now
+  /** Open Browse with the composer already pointed at this dataset and
+   *  symbol, rather than dropping the user on an empty form. */
+  function browseTo(kind: string, symbol = "") {
+    composer.symbol = symbol;
     navigate("browse");
   }
 
@@ -142,7 +235,7 @@
       <h1 class="lib-title">Library</h1>
       {#if coverage.length > 0}
         <span class="lib-meta text-mono fg-muted">
-          {grouped().length} symbols · {fmtBytes(coverage.reduce((s, r) => s + r.bytes, 0))} total
+          {grouped.length} symbols · {fmtBytes(coverage.reduce((s, r) => s + r.bytes, 0))} total
         </span>
       {/if}
     </div>
@@ -151,15 +244,32 @@
       <span class="row-msg text-body-sm" role="status">{rowMsg}</span>
     {/if}
 
-    <div class="search-wrap">
-      <Search size={14} strokeWidth={1.75} class="search-icon" aria-hidden="true" />
-      <input
-        class="search-input"
-        type="search"
-        placeholder="Filter symbol…"
-        bind:value={filterQuery}
-        aria-label="Filter by symbol"
-      />
+    <div class="header-controls">
+      {#if grouped.length > 0}
+        <button class="btn btn-ghost" onclick={toggleAll}>
+          {allExpanded ? "Collapse all" : "Expand all"}
+        </button>
+      {/if}
+
+      <label class="sort-control">
+        <span class="sr-only">Sort by</span>
+        <select class="sort-select" bind:value={sortKey} aria-label="Sort by">
+          {#each Object.entries(SORT_LABELS) as [key, label]}
+            <option value={key}>{label}</option>
+          {/each}
+        </select>
+      </label>
+
+      <div class="search-wrap">
+        <Search size={14} strokeWidth={1.75} class="search-icon" aria-hidden="true" />
+        <input
+          class="search-input"
+          type="search"
+          placeholder="Filter symbol or dataset…"
+          bind:value={filterQuery}
+          aria-label="Filter by symbol or dataset"
+        />
+      </div>
     </div>
   </div>
 
@@ -170,7 +280,7 @@
         <div class="spinner" aria-label="Loading library"></div>
         <span class="text-body-sm fg-muted">Loading library…</span>
       </div>
-    {:else if grouped().length === 0 && !filterQuery}
+    {:else if grouped.length === 0 && !filterQuery}
       <div class="empty-state">
         <div class="empty-icon" aria-hidden="true">
           <Library size={40} strokeWidth={1.25} />
@@ -188,10 +298,11 @@
       </div>
     {:else}
       <!-- Downloaded symbol list -->
-      {#if grouped().length > 0}
+      {#if grouped.length > 0}
         <div class="symbol-list" role="list">
-          {#each grouped() as [symbol, rows] (symbol)}
+          {#each grouped as [symbol, rows] (symbol)}
             {@const expanded = expandedSymbols.has(symbol)}
+            {@const symbolGaps = rows.reduce((n, r) => n + approxGaps(r), 0)}
             <div class="symbol-group" role="listitem">
               <button
                 class="symbol-row"
@@ -208,6 +319,8 @@
                 </div>
                 <span class="symbol-ticker text-mono">{symbol}</span>
                 <div class="symbol-summary">
+                  <span class="sum-stat text-mono">{fmtNum(rows.length)} {rows.length === 1 ? "dataset" : "datasets"}</span>
+                  <span class="sum-sep">·</span>
                   <span class="sum-stat text-mono">{fmtNum(symbolTotalFiles(rows))} files</span>
                   <span class="sum-sep">·</span>
                   <span class="sum-stat text-mono">{fmtBytes(symbolTotalBytes(rows))}</span>
@@ -215,6 +328,23 @@
                   <span class="sum-stat text-mono">{symbolSpan(rows)}</span>
                 </div>
               </button>
+
+              <div class="symbol-aside">
+                {#if symbolGaps > 0}
+                  <span class="gap-pill" title="Weekdays inside the span with no file">
+                    {fmtNum(symbolGaps)} missing
+                  </span>
+                {/if}
+                <button
+                  class="btn-icon"
+                  onclick={() => refillSymbol(symbol, rows)}
+                  disabled={busy}
+                  title="Queue the missing dates across every dataset for {symbol}"
+                  aria-label="Queue the missing dates for {symbol}"
+                >
+                  <RotateCcw size={13} strokeWidth={1.75} />
+                </button>
+              </div>
 
               {#if expanded}
                 <div class="kind-rows">
@@ -229,12 +359,18 @@
                         <span class="sum-sep">·</span>
                         <span>{fmtBytes(row.bytes)}</span>
                         <span class="sum-sep">·</span>
+                        <span>{row.format}</span>
+                        <span class="sum-sep">·</span>
                         <span>{row.first ?? "—"} → {row.last ?? "—"}</span>
+                        {#if approxGaps(row) > 0}
+                          <span class="sum-sep">·</span>
+                          <span class="gap-count">{fmtNum(approxGaps(row))} missing</span>
+                        {/if}
                       </div>
                       <div class="kind-actions">
                         <button
                           class="btn-icon"
-                          onclick={() => navigate("browse")}
+                          onclick={() => browseTo(row.kind, symbol)}
                           title="Download more dates"
                           aria-label="Download more dates for {symbol} {row.kind}"
                         >
@@ -272,7 +408,7 @@
       {/if}
 
       <!-- ── Available datasets not yet on disk ─────────────────── -->
-      {#if !filterQuery && neverDownloaded().length > 0}
+      {#if !filterQuery && neverDownloaded.length > 0}
         <div class="never-section">
           <button
             type="button"
@@ -288,12 +424,12 @@
             <span class="never-toggle-label">
               Available datasets you don't have on disk
             </span>
-            <span class="never-count text-caption tabnum">{neverDownloaded().length}</span>
+            <span class="never-count text-caption tabnum">{neverDownloaded.length}</span>
           </button>
 
           {#if neverOpen}
             <div class="never-body">
-              {#each neverByCategory() as group (group.category)}
+              {#each neverByCategory as group (group.category)}
                 <div class="never-category">
                   <div class="never-cat-label text-caption">{group.category}</div>
                   <div class="never-grid">

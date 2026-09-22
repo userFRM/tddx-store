@@ -221,8 +221,9 @@ pub async fn requeue_tasks(
     queue.requeue_many(&ids).await.map_err(|e| e.to_string())
 }
 
-/// Delete finished tasks from the queue. Pending and running rows are
-/// left alone; cancel those first.
+/// Delete tasks from the queue, whatever their status. A running task's
+/// request finishes on the server either way; removing the row just
+/// stops tracking it, so this needs no cancel first.
 #[tauri::command]
 pub async fn remove_tasks(
     state: State<'_, Arc<AppState>>,

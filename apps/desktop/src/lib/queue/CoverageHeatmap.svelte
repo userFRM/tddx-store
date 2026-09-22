@@ -9,14 +9,13 @@
    *   surface-3   missing but available upstream
    *   subtle dot  not a trading day
    */
-  import { onMount } from "svelte";
   import { Loader2, Plus, AlertTriangle } from "lucide-svelte";
   import { api, type Coverage, TAURI_AVAILABLE } from "$lib/api";
   import { app, log, openComposer, DATASETS } from "$lib/stores/app.svelte";
   // DATASETS is used as fallback for the composer anchor until catalogue-driven detail is wired
 
   let {
-    symbol = "QQQ",
+    symbol = "",
     kind = "stock_trade_quote",
   }: { symbol?: string; kind?: string } = $props();
 
@@ -30,7 +29,11 @@
   const requestType = $derived(kind.includes("quote") ? "QUOTE" : "TRADE");
 
   async function load() {
-    if (!TAURI_AVAILABLE) return;
+    if (!TAURI_AVAILABLE || !symbol) {
+      local = [];
+      upstream = [];
+      return;
+    }
     loading = true;
     err = null;
     try {
@@ -38,35 +41,25 @@
       const endpoint = isOption ? "option_list_dates" : "stock_list_dates";
       upstream = await api.listQuery({ endpoint, args });
       const cov: Coverage[] = await api.coverage();
-      const found = cov.find((c) => c.symbol === symbol && c.kind === kind);
-      local = found ? expandRange(found.first, found.last) : [];
+      // The dates the scan actually found. An earlier version inferred
+      // them by filling in every weekday between the first and last
+      // file, which drew missing days as present and made the view
+      // useless for its one job.
+      local = cov.find((c) => c.symbol === symbol && c.kind === kind)?.dates ?? [];
     } catch (e: unknown) {
       err = e instanceof Error ? e.message : String(e);
     } finally {
       loading = false;
     }
   }
-  onMount(load);
-  $effect(() => { void symbol; void kind; load(); });
 
-  function expandRange(first: string | null, last: string | null): string[] {
-    // Coverage gives min/max; we don't get the full per-day list back yet.
-    // Approximate: every weekday between first and last is "have it".
-    // The on-disk truth is a finer scan (TODO: expose per-day file index
-    // from tdds-core::coverage::scan).
-    if (!first || !last) return [];
-    const out: string[] = [];
-    const f = new Date(first);
-    const l = new Date(last);
-    while (f <= l) {
-      const dow = f.getDay();
-      if (dow !== 0 && dow !== 6) {
-        out.push(f.toISOString().slice(0, 10));
-      }
-      f.setDate(f.getDate() + 1);
-    }
-    return out;
-  }
+  // `$effect` covers the initial run as well as every later change to
+  // `symbol` or `kind`; an `onMount(load)` alongside it loaded twice.
+  $effect(() => {
+    void symbol;
+    void kind;
+    void load();
+  });
 
   // Group upstream dates by year-month for the calendar grid.
   const grid = $derived.by(() => {
@@ -118,7 +111,7 @@
   <header class="head">
     <div>
       <span class="text-caption">Coverage</span>
-      <h2 class="title">{symbol} · <code>{kind}</code></h2>
+      <h2 class="title">{symbol || "No symbol"} · <code>{kind}</code></h2>
     </div>
     <div class="stat-row tabnum">
       <div class="stat"><span class="k">Upstream</span><span class="v">{stats.upstream}</span></div>
@@ -132,7 +125,11 @@
     </div>
   </header>
 
-  {#if loading}
+  {#if !symbol}
+    <div class="state">
+      Pick a symbol to see which trading days you hold for this dataset.
+    </div>
+  {:else if loading}
     <div class="state"><Loader2 class="spin" size={14} /> Loading coverage…</div>
   {:else if err}
     <div class="state error"><AlertTriangle size={14} /> {err}</div>

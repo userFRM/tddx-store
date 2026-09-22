@@ -24,6 +24,10 @@ pub async fn coverage_report(
                 "bytes": c.bytes,
                 "first": c.dates.first().map(|d| d.format("%Y-%m-%d").to_string()),
                 "last": c.dates.last().map(|d| d.format("%Y-%m-%d").to_string()),
+                // Every date actually present, not just the span. The
+                // heatmap needs these: inferring "every weekday between
+                // first and last" paints gaps as though they were files.
+                "dates": c.dates.iter().map(|d| d.format("%Y-%m-%d").to_string()).collect::<Vec<_>>(),
                 "format": c.format.extension(),
             })
         })

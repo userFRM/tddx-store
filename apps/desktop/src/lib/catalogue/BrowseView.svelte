@@ -15,6 +15,8 @@
 
   import { Loader2, Check, ArrowUpRight, Bookmark, Plus } from "lucide-svelte";
   import AssetClassPicker from "$lib/catalogue/AssetClassPicker.svelte";
+  import FlatfilesShelf from "$lib/runners/FlatfilesShelf.svelte";
+  import IndexPresetsShelf from "$lib/runners/IndexPresetsShelf.svelte";
   import UniverseSelector from "$lib/catalogue/UniverseSelector.svelte";
   import KindGrid from "$lib/catalogue/KindGrid.svelte";
   import RangePicker from "$lib/catalogue/RangePicker.svelte";
@@ -495,6 +497,17 @@
       </section>
     {/if}
 
+    <!-- ── Bulk surfaces ─────────────────────────────────────────
+         Whole-day flat-file archives and index-constituent presets are
+         separate ways in: they queue by the day or by the index rather
+         than by the symbol-and-range flow above. Both have working
+         runners; they were built without ever being mounted, so nothing
+         could reach them. -->
+    <section class="bulk-shelves" aria-label="Bulk download surfaces">
+      <FlatfilesShelf />
+      <IndexPresetsShelf />
+    </section>
+
     <!-- Bottom padding so footer doesn't obscure last section -->
     <div class="footer-spacer"></div>
   </div>
@@ -787,6 +800,15 @@
     display: flex;
     gap: var(--sp-2);
     flex-shrink: 0;
+  }
+
+  .bulk-shelves {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-8);
+    margin-top: var(--sp-8);
+    padding-top: var(--sp-8);
+    border-top: 1px solid var(--border);
   }
 
   .footer-spacer { height: 96px; }

@@ -89,9 +89,6 @@
   const canCancel = $derived(
     selectedRows.some((r) => r.status === "pending" || r.status === "running"),
   );
-  const canRemove = $derived(
-    selectedRows.some((r) => r.status !== "pending" && r.status !== "running"),
-  );
 
   function toggleAllVisible() {
     selected = allVisibleSelected ? new Set() : new Set(rows.map((r) => r.id));
@@ -300,7 +297,12 @@
         <button class="btn btn-secondary" onclick={cancelSelected} disabled={busy || !canCancel}>
           <X size={13} strokeWidth={1.75} /> Cancel
         </button>
-        <button class="btn btn-secondary danger" onclick={removeSelected} disabled={busy || !canRemove}>
+        <button
+          class="btn btn-secondary danger"
+          onclick={removeSelected}
+          disabled={busy}
+          title="Delete these tasks from the queue. Anything still running stops being tracked."
+        >
           <Trash2 size={13} strokeWidth={1.75} /> Remove
         </button>
       </div>
@@ -453,24 +455,23 @@
                   await api.cancelTasks([task.id]);
                   return `Cancelled ${task.symbol} ${task.date}`;
                 })}
-                title="Cancel"
+                title="Stop this task, keep the row"
                 aria-label="Cancel {task.symbol} {task.date}"
               >
                 <X size={13} strokeWidth={1.75} />
               </button>
-            {:else}
-              <button
-                class="btn-icon danger"
-                onclick={() => act(async () => {
-                  await api.removeTasks([task.id]);
-                  return `Removed ${task.symbol} ${task.date}`;
-                })}
-                title="Remove from the queue"
-                aria-label="Remove {task.symbol} {task.date} from the queue"
-              >
-                <Trash2 size={13} strokeWidth={1.75} />
-              </button>
             {/if}
+            <button
+              class="btn-icon danger"
+              onclick={() => act(async () => {
+                await api.removeTasks([task.id]);
+                return `Removed ${task.symbol} ${task.date}`;
+              })}
+              title="Delete this task from the queue"
+              aria-label="Remove {task.symbol} {task.date} from the queue"
+            >
+              <Trash2 size={13} strokeWidth={1.75} />
+            </button>
           </div>
         </div>
       {/each}

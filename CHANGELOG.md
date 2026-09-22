@@ -74,6 +74,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   text. Caught by the new bulk-operation tests.
 - The index-preset modal had no Escape-to-close, unlike every other
   modal in the app.
+- **Removing a queued task took two rounds** — cancel, reselect, remove
+  — because removal refused live rows. It never needed to: every worker
+  write is `WHERE id=? AND status='running' AND claimed_by=?`, so a
+  deleted row makes them no-ops the worker already handles. Remove
+  works in one step on anything.
+- **The coverage heatmap invented the local side.** It received only the
+  first and last date and filled in every weekday between them, drawing
+  missing days as present — in the one view whose entire job is showing
+  gaps. The scan's real date list is sent now. The same view was pinned
+  to `symbol="QQQ"`, so it reported QQQ's coverage whatever dataset was
+  open, and loaded twice on mount.
+- **Links had no style at all**, falling back to the browser's default
+  navy, which is unreadable on the dark theme.
+- **The flat-file shelf and the index-preset shelf were never mounted.**
+  Both features were complete, compiled and unreachable; they are on
+  the Browse page now.
 - Accessibility: clickable cards wrapped nested buttons in
   `role="button"`, the date-range handles carried slider ARIA on a
   button role, both sign-in forms were `<div>`s with a keydown handler
@@ -96,6 +112,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hard-coded `rgba()` tuned for dark only.
 - The subscription-tier pill palette is defined once instead of being
   copied into five components.
+- **Tiers are coloured as a ladder.** They ran neutral, blue, green,
+  amber: four unrelated hues that do not read as an order and collide
+  with the status palette, since an amber Pro badge says *warning* and
+  a green Standard badge says *success*. They now climb one blue by
+  weight, with Pro the only filled chip. A cyan variant was tried and
+  dropped — cyan sits next to blue on the wheel and muddies rather than
+  ranks. Violet stays out: it is another vendor's identity.
+- The dark theme's surfaces are deeper and cooler, and it no longer
+  carries amber anywhere except genuine warnings.
 - Queue tasks and the endpoint browser share one dispatcher. The
   worker's seven hand-written per-kind branches are gone.
 - The wordmark is an inline component so one asset serves both themes.
@@ -106,6 +131,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does too, with a method switch on the login screen and the key stored
   in the same encrypted vault. `THETADATA_API_KEY` in the environment
   signs in without typing anything.
+- **Library search, sort and gap counts.** The filter matches the
+  dataset as well as the symbol, sorting covers symbol, size, file
+  count and recency, there is an expand/collapse all, each row shows
+  its format and how many weekdays inside its own span have no file,
+  and one action fills every gap for a symbol at once.
 - **A queue you can work with.** Checkbox selection with shift-click
   ranges, a select-all-visible header box, a bulk action bar (move to
   front, duplicate, retry, cancel, remove), a text filter over symbol,

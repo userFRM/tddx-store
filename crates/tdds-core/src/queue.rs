@@ -421,16 +421,18 @@ impl Queue {
         .await
     }
 
-    /// Delete every id that has finished. A pending or running row is
-    /// left alone: removing one out from under a worker would orphan an
-    /// in-flight request.
+    /// Delete tasks outright, whatever their status.
+    ///
+    /// Removing a running row is safe and needs no cancel first: every
+    /// write a worker makes is `WHERE id=? AND status='running' AND
+    /// claimed_by=?`, so against a deleted row the heartbeat and the
+    /// terminal `mark_*` are no-ops the worker already treats as "this
+    /// task went away, move on". The request in flight finishes either
+    /// way, which is exactly what cancelling does too — the difference
+    /// is only whether a row is left behind to look at.
     pub async fn remove_many(&self, ids: &[String]) -> crate::Result<u64> {
-        self.update_many(
-            ids,
-            "DELETE FROM tasks WHERE status IN ('done','failed','empty') AND id IN",
-            None,
-        )
-        .await
+        self.update_many(ids, "DELETE FROM tasks WHERE id IN", None)
+            .await
     }
 
     /// Delete every finished row, or every row in one finished status.
@@ -709,17 +711,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remove_many_refuses_to_delete_live_rows() {
+    async fn remove_many_deletes_whatever_it_is_given() {
         let queue = single_connection_memory_queue("owner").await;
-        let ids = enqueue_n(&queue, 2).await;
-        let done = finish_next(&queue, TaskStatus::Done).await;
-        let still_pending = ids.iter().find(|id| **id != done).unwrap();
+        let ids = enqueue_n(&queue, 3).await;
+        finish_next(&queue, TaskStatus::Done).await;
+        let running = queue.claim_next().await.unwrap().unwrap();
 
-        // The pending row stays: removing it would orphan whatever claims
-        // it next.
-        assert_eq!(queue.remove_many(&ids).await.unwrap(), 1);
-        assert!(queue.fetch(&done).await.is_err(), "the done row is gone");
-        assert_eq!(status_of(&queue, still_pending).await, TaskStatus::Pending);
+        // Done, running and pending all go in one step: needing to cancel
+        // first and remove second is two round trips for one intent.
+        assert_eq!(queue.remove_many(&ids).await.unwrap(), 3);
+        for id in &ids {
+            assert!(queue.fetch(id).await.is_err());
+        }
+
+        // The worker holding the removed row finds its writes are no-ops
+        // rather than errors, which is how it learns the task went away.
+        assert!(!queue.heartbeat(&running.id).await.unwrap());
+        assert!(!queue.mark_done(&running.id, 1, 1).await.unwrap());
     }
 
     #[tokio::test]

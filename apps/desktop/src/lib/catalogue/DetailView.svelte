@@ -13,6 +13,7 @@
     type DatasetMeta,
   } from "$lib/stores/app.svelte";
   import { api, fmtBytes, fmtNum, type Coverage } from "$lib/api";
+  import { composer } from "$lib/stores/app.svelte";
   import { onMount } from "svelte";
   import CoverageHeatmap from "$lib/queue/CoverageHeatmap.svelte";
   import { renderMarkdown } from "$lib/util/md";
@@ -31,6 +32,16 @@
   let sampleError = $state("");
 
   const dataset = $derived(app.detailDataset!);
+
+  /** Which symbol the calendar heatmap describes. It was pinned to
+   *  "QQQ", so the Coverage tab reported QQQ's gaps whatever dataset or
+   *  symbol was open. Prefer what the user last worked with, then the
+   *  first symbol this dataset already has on disk. */
+  const coverageSymbol = $derived(
+    composer.symbol?.trim().toUpperCase().split(/[\s,;]+/)[0] ||
+      coverage[0]?.symbol ||
+      "",
+  );
   const catalogueEntry = $derived(
     dataset ? app.catalogue.find((e) => e.name === dataset.id) ?? null : null
   );
@@ -199,7 +210,7 @@
     {:else if activeTab === "coverage"}
       <div class="coverage-view">
         <!-- Live calendar heatmap: upstream availability vs local files -->
-        <CoverageHeatmap symbol="QQQ" kind={dataset.id} />
+        <CoverageHeatmap symbol={coverageSymbol} kind={dataset.id} />
         <div class="divider"></div>
         {#if loadingCoverage}
           <div class="loading-state">

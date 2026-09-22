@@ -34,6 +34,20 @@ html, body {
 ::-webkit-scrollbar-thumb:hover { background: var(--fg-subtle); }
 ::-webkit-scrollbar-corner   { background: transparent; }
 
+/* ── Links ──────────────────────────────────────────────────── */
+/* There was no rule here at all, so every plain anchor fell back to the
+   browser's default navy — invisible against a dark surface. */
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover { color: var(--accent-hi); text-decoration: underline; }
+a:focus-visible {
+  outline: none;
+  border-radius: 2px;
+  box-shadow: var(--shadow-glow-accent);
+}
+
 /* ── Typography utilities ───────────────────────────────────── */
 .text-display-xl {
   font-family: var(--font-display);

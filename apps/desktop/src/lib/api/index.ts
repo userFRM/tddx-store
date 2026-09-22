@@ -70,6 +70,9 @@ export type Coverage = {
   bytes: number;
   first: string | null;
   last: string | null;
+  /** Every date on disk, ISO `YYYY-MM-DD`. The span alone cannot show
+   *  gaps, which is the whole point of a coverage view. */
+  dates: string[];
   /** Extension the existing files use, so a refill writes the same
    *  format as the rest of the set. */
   format: string;
@@ -164,6 +167,7 @@ export const api = {
    *  rows that had already moved on are skipped rather than erroring. */
   cancelTasks: (ids: string[]) => invoke<number>("cancel_tasks", { ids }),
   requeueTasks: (ids: string[]) => invoke<number>("requeue_tasks", { ids }),
+  /** Deletes rows outright, live ones included — no cancel-first step. */
   removeTasks: (ids: string[]) => invoke<number>("remove_tasks", { ids }),
   bumpTasks: (ids: string[]) => invoke<number>("bump_tasks", { ids }),
   duplicateTasks: (ids: string[]) => invoke<number>("duplicate_tasks", { ids }),

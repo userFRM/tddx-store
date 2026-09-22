@@ -10,8 +10,9 @@
    transitions.
 
    Light is the default because the brand is. The dark theme is this
-   app's own addition for long sessions in front of a tape; it keeps
-   the same blue rather than inventing a second identity.
+   app's own addition for long sessions in front of a tape; it derives
+   its palette from the brand's own logo gradient rather than inventing
+   one, and is documented at the bottom of this file.
 
    Reference var(--token-name) in components. Do not hard-code values.
    ============================================================ */
@@ -42,7 +43,7 @@
   --accent-tint:    rgba(16, 116, 255, 0.10);
 
   --good:           #1F7A4D;
-  --warn:           #8A5B00;
+  --warn:           #8A6100;
   --bad:            #C0392B;
   --data-bull:      #0F8A55;
   --data-bear:      #C0392B;
@@ -73,20 +74,31 @@
   --scrim:          rgba(50, 51, 72, 0.32);
 
   /* ── Subscription tiers ─────────────────────────────────── */
-  /* Free reads neutral, then blue, green, amber as entitlement rises.
-     Defined once here; the pill rule in app.css is the only consumer. */
-  --tier-free-bg:        var(--neutral-tint);
-  --tier-free-fg:        var(--fg-muted);
-  --tier-free-border:    transparent;
-  --tier-value-bg:       rgba(16, 116, 255, 0.10);
-  --tier-value-fg:       #0063CC;
-  --tier-value-border:   rgba(16, 116, 255, 0.22);
-  --tier-standard-bg:    rgba(31, 122, 77, 0.10);
-  --tier-standard-fg:    #1F7A4D;
-  --tier-standard-border: rgba(31, 122, 77, 0.22);
-  --tier-pro-bg:         rgba(212, 158, 0, 0.12);
-  --tier-pro-fg:         #8A5B00;
-  --tier-pro-border:     rgba(212, 158, 0, 0.30);
+  /* A ladder, so it reads as one: the same blue gaining weight, from a
+     grey chip to a filled one. No second hue enters the palette.
+     
+     Two earlier attempts proved the point. neutral/blue/green/amber
+     was four unrelated hues that did not read as an order and fought
+     the status colours — an amber Pro badge says "warning" and a green
+     Standard badge says "success", when neither is either. Swapping
+     amber for the logo's cyan was no better: cyan sits next to blue on
+     the wheel, so the two muddied each other instead of ranking.
+     
+     Weight is the axis that actually encodes rank, and it costs no
+     colour. */
+  --tier-free-bg:         var(--neutral-tint);
+  --tier-free-fg:         var(--fg-muted);
+  --tier-free-border:     transparent;
+  --tier-value-bg:        rgba(16, 116, 255, 0.06);
+  --tier-value-fg:        #5A7FA8;
+  --tier-value-border:    rgba(16, 116, 255, 0.14);
+  --tier-standard-bg:     rgba(16, 116, 255, 0.12);
+  --tier-standard-fg:     #0063CC;
+  --tier-standard-border: rgba(16, 116, 255, 0.28);
+  /* Pro is the only filled chip. That is the whole signal. */
+  --tier-pro-bg:          var(--accent);
+  --tier-pro-fg:          var(--on-accent);
+  --tier-pro-border:      var(--accent);
 
   /* ── Typography ─────────────────────────────────────────── */
   --font-ui:        "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -168,24 +180,33 @@
 /* ============================================================
    Dark theme. Activated by `<html data-theme="dark">`.
 
-   Not a brand surface — the brand is light. This exists because the
-   app is a desktop tool people leave open next to a chart. It keeps
-   brand blue as the identity colour and lifts the action blue so it
-   stays legible on dark, rather than substituting a different hue.
-   Surfaces step UP in lightness from the canvas, the same nesting
-   rule as light, inverted.
+   The brand sheet is a light document, so there is no dark palette to
+   copy. So it does not try to have one: the same brand blue carries
+   through, lifted for legibility against a dark surface, and emphasis
+   is carried by weight rather than by a second hue.
+
+   Three hues are deliberately absent. Amber is confined to genuine
+   warnings and never badges anything desirable. Cyan was tried and
+   dropped: it sits next to blue on the wheel, so the pair muddies
+   rather than ranks. Violet is out entirely — it is another
+   market-data vendor's identity, and a tool in this category wearing
+   it invites a comparison nobody asked for.
+
+   Surfaces are cool and near-neutral with a slight blue cast, stepping
+   UP in lightness from the canvas — the same nesting rule as light,
+   inverted.
    ============================================================ */
 :root[data-theme="dark"] {
-  --bg:             #14161D;
-  --surface-1:      #1A1D26;
-  --surface-2:      #20242F;
-  --surface-3:      #282D3A;
-  --border:         #2C3140;
-  --border-strong:  #3A4154;
+  --bg:             #0E1117;
+  --surface-1:      #151922;
+  --surface-2:      #1C212C;
+  --surface-3:      #252B38;
+  --border:         #2A3040;
+  --border-strong:  #3A4256;
 
-  --fg:             #E8EAF0;
-  --fg-muted:       #A4A9B8;
-  --fg-subtle:      #6E7486;
+  --fg:             #E9ECF3;
+  --fg-muted:       #A6AEBF;
+  --fg-subtle:      #6C7488;
 
   --accent:         #4D9BFF;
   --accent-hi:      #7AB5FF;
@@ -193,7 +214,7 @@
   --accent-tint:    rgba(77, 155, 255, 0.14);
 
   --good:           #4ECB8C;
-  --warn:           #E5B24C;
+  --warn:           #D9A441;
   --bad:            #FF7A6B;
   --data-bull:      #34D399;
   --data-bear:      #F87171;
@@ -217,18 +238,19 @@
 
   --scrim:          rgba(8, 11, 18, 0.55);
 
+  /* The same ladder as light: one blue gaining weight, Pro filled. */
   --tier-free-bg:         var(--neutral-tint);
   --tier-free-fg:         var(--fg-muted);
   --tier-free-border:     transparent;
-  --tier-value-bg:        rgba(77, 155, 255, 0.14);
-  --tier-value-fg:        #7AB5FF;
-  --tier-value-border:    rgba(77, 155, 255, 0.28);
-  --tier-standard-bg:     rgba(78, 203, 140, 0.14);
-  --tier-standard-fg:     #4ECB8C;
-  --tier-standard-border: rgba(78, 203, 140, 0.26);
-  --tier-pro-bg:          rgba(229, 178, 76, 0.14);
-  --tier-pro-fg:          #E5B24C;
-  --tier-pro-border:      rgba(229, 178, 76, 0.28);
+  --tier-value-bg:        rgba(77, 155, 255, 0.07);
+  --tier-value-fg:        #8FA6C4;
+  --tier-value-border:    rgba(77, 155, 255, 0.16);
+  --tier-standard-bg:     rgba(77, 155, 255, 0.16);
+  --tier-standard-fg:     #7AB5FF;
+  --tier-standard-border: rgba(77, 155, 255, 0.30);
+  --tier-pro-bg:          var(--accent);
+  --tier-pro-fg:          #0B1220;
+  --tier-pro-border:      var(--accent);
 
   --shadow-flat:         0 0 0 1px rgba(0, 0, 0, 0.25);
   --shadow-raised:       0 1px 2px rgba(0, 0, 0, 0.45),
