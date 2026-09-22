@@ -109,6 +109,16 @@ pub struct DataSpec {
     /// `*` (default) = every expiration on this date.
     #[serde(default = "default_expiration")]
     pub expiration: String,
+    /// The last date of a range pull, when the endpoint takes a range
+    /// rather than a single day.
+    ///
+    /// Endpoints split into two shapes: some declare `date` and are
+    /// fanned out one task per trading day, others declare
+    /// `start_date`/`end_date` and answer a whole window in one call.
+    /// `date` is the start in both cases; this is the end, and it is
+    /// `None` for the per-day shape.
+    #[serde(default)]
+    pub end_date: Option<NaiveDate>,
     /// `*` = every strike.
     #[serde(default = "default_strike")]
     pub strike: String,
@@ -145,9 +155,61 @@ fn default_right() -> String {
     "both".into()
 }
 
+/// The widest window the range endpoints accept. Asking for more is
+/// rejected server-side with "Too many days between start and end date;
+/// max 365 days allowed", so a longer request has to be split before it
+/// is queued rather than discovered as a failure afterwards.
+pub const MAX_RANGE_DAYS: i64 = 365;
+
+/// Split `[start, end]` into consecutive windows no wider than
+/// [`MAX_RANGE_DAYS`].
+///
+/// A window already within the limit comes back unchanged, so the
+/// common case stays one task. Longer ones are divided into the fewest
+/// pieces that fit and then balanced across them: a three-year request
+/// becomes three requests of a year each, and a four-year one becomes
+/// four evenly-sized requests rather than three full years plus a
+/// three-day remainder. Same number of calls either way, but the
+/// progress the user watches advances evenly and a failure costs a
+/// proportionate slice of the work.
+pub fn chunk_window(start: NaiveDate, end: NaiveDate) -> Vec<(NaiveDate, NaiveDate)> {
+    if end < start {
+        return vec![];
+    }
+    // Inclusive of both ends: Jan 1 to Jan 1 is one day of data.
+    let total_days = (end - start).num_days() + 1;
+    let max_per_chunk = MAX_RANGE_DAYS + 1;
+    // `div_ceil` on integers is still unstable on the pinned toolchain.
+    let ceil_div = |a: i64, b: i64| (a + b - 1) / b;
+    let chunks = ceil_div(total_days, max_per_chunk).max(1);
+    let per_chunk = ceil_div(total_days, chunks);
+
+    let mut out = Vec::with_capacity(chunks as usize);
+    let mut from = start;
+    while from <= end {
+        let candidate = from + chrono::Duration::days(per_chunk - 1);
+        let to = if candidate < end { candidate } else { end };
+        out.push((from, to));
+        match to.succ_opt() {
+            Some(next) => from = next,
+            None => break,
+        }
+    }
+    out
+}
+
 impl DataSpec {
     pub fn ymd(&self) -> String {
         self.date.format("%Y%m%d").to_string()
+    }
+
+    /// The end of the window, as the wire spells dates. A spec with no
+    /// explicit end covers a single day.
+    pub fn end_ymd(&self) -> String {
+        self.end_date
+            .unwrap_or(self.date)
+            .format("%Y%m%d")
+            .to_string()
     }
 
     /// The part of a filename that distinguishes this pull from another
@@ -170,6 +232,13 @@ impl DataSpec {
         let right = self.right.to_lowercase();
         if right != "both" && right != "*" && !right.is_empty() {
             parts.push(sanitize(&right));
+        }
+        // A window is part of what makes the pull distinct: the same
+        // dataset over two different ranges is two different files.
+        if let Some(end) = self.end_date {
+            if end != self.date {
+                parts.push(format!("to{}", end.format("%Y%m%d")));
+            }
         }
         if let Some(interval) = self.interval.as_deref() {
             let normalized = normalize_interval(interval);
@@ -229,6 +298,14 @@ impl DataSpec {
                 "strike" => Some(self.strike.clone()),
                 "right" => Some(self.right.clone()),
                 "interval" => self.interval.clone(),
+                // The range shape. Filling only `date` meant every
+                // endpoint that declares a window and no single day —
+                // the EOD datasets, the greeks EOD datasets, both
+                // at-time datasets — reached the dispatcher without the
+                // arguments it declares as required and failed, every
+                // task, every time.
+                "start_date" => Some(self.ymd()),
+                "end_date" => Some(self.end_ymd()),
                 other => self.extra.get(other).cloned(),
             };
             if let Some(v) = value {
@@ -403,6 +480,7 @@ mod tests {
             expiration: "*".into(),
             strike: "*".into(),
             right: "both".into(),
+            end_date: None,
             transforms: crate::Transforms::default(),
             extra: BTreeMap::new(),
         }
@@ -413,6 +491,114 @@ mod tests {
     /// at the queue: `to_endpoint_spec` filled six names and dropped
     /// everything else, so a user who asked for 5 strikes around spot
     /// silently downloaded the whole chain.
+    /// The EOD datasets, the greeks EOD datasets and both at-time
+    /// datasets declare `start_date`/`end_date` and no `date`. Filling
+    /// only `date` meant every task for them reached the dispatcher
+    /// without the arguments the registry marks required, and failed
+    /// with "missing required arg 'start_date'" — 100% of the time,
+    /// for every symbol and every window.
+    #[test]
+    fn a_window_inside_the_limit_stays_one_task() {
+        let a = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+        let b = NaiveDate::from_ymd_opt(2025, 6, 1).unwrap();
+        assert_eq!(chunk_window(a, b), vec![(a, b)]);
+    }
+
+    /// Three years of daily history is four calls, not one rejected
+    /// one and not 751 malformed ones.
+    #[test]
+    fn a_longer_window_is_split_at_the_server_limit() {
+        let a = NaiveDate::from_ymd_opt(2023, 9, 22).unwrap();
+        let b = NaiveDate::from_ymd_opt(2026, 9, 22).unwrap();
+        let chunks = chunk_window(a, b);
+
+        assert_eq!(
+            chunks.len(),
+            3,
+            "three years is three requests, not one rejected one"
+        );
+        assert_eq!(chunks.first().unwrap().0, a, "starts where asked");
+        assert_eq!(chunks.last().unwrap().1, b, "ends where asked");
+
+        // Balanced: no window is more than a day off any other, so the
+        // split does not leave a one-day tail.
+        let widths: Vec<i64> = chunks
+            .iter()
+            .map(|(f, t)| (*t - *f).num_days() + 1)
+            .collect();
+        let (lo, hi) = (widths.iter().min().unwrap(), widths.iter().max().unwrap());
+        assert!(hi - lo <= 1, "windows are lopsided: {widths:?}");
+        assert_eq!(widths.iter().sum::<i64>(), (b - a).num_days() + 1);
+        for (from, to) in &chunks {
+            assert!(
+                (*to - *from).num_days() <= MAX_RANGE_DAYS,
+                "{from}..{to} is wider than the server accepts"
+            );
+        }
+        // Contiguous and non-overlapping: no day is fetched twice and
+        // none is skipped.
+        for pair in chunks.windows(2) {
+            assert_eq!(pair[0].1.succ_opt().unwrap(), pair[1].0);
+        }
+    }
+
+    #[test]
+    fn a_backwards_window_yields_nothing() {
+        let a = NaiveDate::from_ymd_opt(2025, 6, 1).unwrap();
+        let b = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+        assert!(chunk_window(a, b).is_empty());
+    }
+
+    #[test]
+    fn range_endpoints_receive_the_window_they_declare() {
+        let mut spec = option_spec();
+        spec.kind = DataKind::parse("stock_history_eod").expect("known dataset");
+        spec.date = NaiveDate::from_ymd_opt(2023, 9, 22).unwrap();
+        spec.end_date = NaiveDate::from_ymd_opt(2026, 9, 22);
+
+        let lowered = spec.to_endpoint_spec();
+        assert_eq!(
+            lowered.args.get("start_date").map(String::as_str),
+            Some("20230922")
+        );
+        assert_eq!(
+            lowered.args.get("end_date").map(String::as_str),
+            Some("20260922")
+        );
+
+        // Every argument the endpoint marks required must be present,
+        // whatever the shape.
+        let meta = thetadatadx::find("stock_history_eod").expect("registry knows it");
+        for p in meta.params.iter().filter(|p| p.required) {
+            assert!(
+                lowered.args.contains_key(p.name),
+                "required arg `{}` never reaches the request",
+                p.name
+            );
+        }
+    }
+
+    /// A spec with no explicit end covers one day, so a single-day pull
+    /// through a range endpoint still asks for a valid window.
+    #[test]
+    fn a_dateless_spec_asks_for_a_single_day_window() {
+        let mut spec = option_spec();
+        spec.kind = DataKind::parse("stock_history_eod").expect("known dataset");
+        let lowered = spec.to_endpoint_spec();
+        assert_eq!(lowered.args.get("start_date"), lowered.args.get("end_date"));
+    }
+
+    /// Two windows over the same dataset are two different files.
+    #[test]
+    fn the_window_is_part_of_the_filename() {
+        let mut a = option_spec();
+        a.kind = DataKind::parse("stock_history_eod").expect("known dataset");
+        let mut b = a.clone();
+        a.end_date = NaiveDate::from_ymd_opt(2026, 1, 1);
+        b.end_date = NaiveDate::from_ymd_opt(2026, 6, 1);
+        assert_ne!(a.file_stem(), b.file_stem());
+    }
+
     #[test]
     fn extra_args_reach_the_endpoint_when_it_declares_them() {
         let mut spec = option_spec();
@@ -470,6 +656,7 @@ mod tests {
             expiration: "*".into(),
             strike: "*".into(),
             right: "both".into(),
+            end_date: None,
             transforms: crate::Transforms::default(),
             extra: BTreeMap::new(),
         };
@@ -512,6 +699,7 @@ mod tests {
             expiration: "20261016".into(),
             strike: "5400.5".into(),
             right: "call".into(),
+            end_date: None,
             transforms: crate::Transforms::default(),
             extra: BTreeMap::new(),
         };

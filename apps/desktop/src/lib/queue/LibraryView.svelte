@@ -396,6 +396,7 @@
           {#each grouped as [symbol, rows] (symbol)}
             {@const expanded = expandedSymbols.has(symbol)}
             <div class="symbol-group" role="listitem">
+              <div class="symbol-head">
               <button
                 class="symbol-row"
                 onclick={() => toggleSymbol(symbol)}
@@ -431,6 +432,7 @@
                   <RotateCcw size={12} strokeWidth={1.75} />
                   Fill gaps
                 </button>
+              </div>
               </div>
 
               {#if expanded}
@@ -765,7 +767,24 @@
   }
   .symbol-group:last-child { border-bottom: none; }
 
+  /* The row button and its aside share one line. `.symbol-aside` had
+     no rule at all, so it fell below the full-width button and sat
+     against the content gutter, reading as a stray control belonging
+     to nothing. */
+  .symbol-head {
+    display: flex;
+    align-items: center;
+  }
+  .symbol-head:hover { background: var(--surface-2); }
+  .symbol-aside {
+    flex: none;
+    padding-right: var(--sp-8);
+    padding-left: var(--sp-3);
+  }
+
   .symbol-row {
+    flex: 1;
+    min-width: 0;
     display: grid;
     grid-template-columns: 20px 80px 1fr;
     align-items: center;

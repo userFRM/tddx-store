@@ -152,6 +152,7 @@ async fn main() -> anyhow::Result<()> {
                     expiration: expiration.clone(),
                     strike: strike.clone(),
                     right: right.clone(),
+                    end_date: None,
                     transforms: Default::default(),
                     extra: Default::default(),
                 };

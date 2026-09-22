@@ -94,6 +94,11 @@
               <span class="k">{k}</span>
               <span class="v">{fmtNum(v)}</span>
             </div>
+          {:else}
+            <!-- The backend sends counts only for statuses that have
+                 rows, so a queue that has never run sends none and this
+                 card rendered as an empty box with a title. -->
+            <p class="hint fg-muted">Queue is empty.</p>
           {/each}
         </div>
       </div>

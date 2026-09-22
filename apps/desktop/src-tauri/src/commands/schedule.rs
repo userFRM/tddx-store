@@ -144,6 +144,7 @@ async fn tick(state: &AppState) -> Result<(), String> {
             expiration: "*".into(),
             strike: "*".into(),
             right: "both".into(),
+            end_date: None,
             transforms: Default::default(),
             extra: Default::default(),
         };

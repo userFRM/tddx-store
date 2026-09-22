@@ -264,7 +264,6 @@
                   <span class="task-symbol">{t.symbol}</span>
                   <span class="task-kind text-figures">{t.kind}</span>
                 </div>
-                <span class="task-date text-figures">{t.date}</span>
               </div>
               <div class="progress-track">
                 <div
@@ -274,6 +273,8 @@
               </div>
               <div class="task-meta tabnum">
                 <span class="meta-pct">{Math.round((runningFracs[t.id] ?? 0.04) * 100)}%</span>
+                <span class="sep">·</span>
+                <span class="task-date">{t.date}{t.end_date ? ` → ${t.end_date}` : ""}</span>
                 <span class="sep">·</span>
                 <span>streaming…</span>
                 <span class="sep">·</span>
@@ -301,7 +302,10 @@
           <p class="text-body-sm fg-muted">Connect in Settings to start downloading.</p>
         </div>
       </section>
-    {:else}
+    {:else if recentDone.length === 0 && failed === 0}
+      <!-- Only truly empty. This used to render whenever nothing was
+           *running*, so it announced "Queue is empty" directly above a
+           list of finished downloads. -->
       <section class="section">
         <div class="empty-active">
           <Download size={20} />
@@ -328,7 +332,9 @@
                   <span class="task-symbol">{t.symbol}</span>
                   <span class="task-kind text-figures">{t.kind}</span>
                 </div>
-                <span class="task-date text-figures">{t.date}</span>
+              </div>
+              <div class="task-meta tabnum">
+                <span class="task-date">{t.date}{t.end_date ? ` → ${t.end_date}` : ""}</span>
               </div>
               {#if t.error}
                 <div class="task-error text-body-sm" title={t.error}>
@@ -356,9 +362,10 @@
                   <span class="task-symbol">{t.symbol}</span>
                   <span class="task-kind text-figures">{t.kind}</span>
                 </div>
-                <span class="task-date text-figures">{t.date}</span>
               </div>
               <div class="task-meta tabnum">
+                <span class="task-date">{t.date}{t.end_date ? ` → ${t.end_date}` : ""}</span>
+                <span class="sep">·</span>
                 <span>{fmtNum(t.rows)} rows</span>
                 <span class="sep">·</span>
                 <span>{fmtBytes(t.bytes)}</span>
@@ -501,6 +508,8 @@
     align-items: center;
     gap: var(--sp-2);
     min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
   }
   .task-icon {
     display: inline-flex;
@@ -519,6 +528,12 @@
     color: var(--fg-muted);
     text-transform: lowercase;
     letter-spacing: 0;
+    /* The pane is narrow and dataset names are long; truncate rather
+       than run under the date beside it. */
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .task-date {
     font-size: var(--text-caption);

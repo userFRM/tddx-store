@@ -38,18 +38,22 @@
   } from "$lib/stores/app.svelte";
   import { listSavedSearches, touchSavedSearch, type SavedSearch } from "$lib/persistence/savedSearches";
 
+  /** `id` is the keyed-each identity. It has to be unique across the
+   *  whole list: labels are not, because two catalogue entries can
+   *  share a title — "Quote" is both a history and an at-time dataset —
+   *  and a duplicate key aborts the render of the entire palette. */
   type Item =
-    | { kind: "nav"; label: string; view: "browse" | "library" | "queue" | "schedules" | "settings"; hint?: string; icon: typeof Search }
-    | { kind: "dataset"; label: string; dataset: DatasetMeta; hint: string; icon: typeof Search }
-    | { kind: "symbol"; label: string; symbol: string; hint: string; icon: typeof Search }
-    | { kind: "saved"; label: string; saved: SavedSearch; hint: string; icon: typeof Search };
+    | { kind: "nav"; id: string; label: string; view: "browse" | "library" | "queue" | "schedules" | "settings"; hint?: string; icon: typeof Search }
+    | { kind: "dataset"; id: string; label: string; dataset: DatasetMeta; hint: string; icon: typeof Search }
+    | { kind: "symbol"; id: string; label: string; symbol: string; hint: string; icon: typeof Search }
+    | { kind: "saved"; id: string; label: string; saved: SavedSearch; hint: string; icon: typeof Search };
 
   const NAV: Item[] = [
-    { kind: "nav", label: "Browse",    view: "browse",    icon: Compass,         hint: "Browse all datasets" },
-    { kind: "nav", label: "Library",   view: "library",   icon: Database,        hint: "Datasets on disk" },
-    { kind: "nav", label: "Queue",     view: "queue",     icon: ListChecks,      hint: "Active downloads" },
-    { kind: "nav", label: "Schedules", view: "schedules", icon: CalendarClock,   hint: "Recurring downloads" },
-    { kind: "nav", label: "Settings",  view: "settings",  icon: SettingsIcon,    hint: "Account & storage" },
+    { kind: "nav", id: "nav:browse",    label: "Browse",    view: "browse",    icon: Compass,       hint: "Browse all datasets" },
+    { kind: "nav", id: "nav:library",   label: "Library",   view: "library",   icon: Database,      hint: "Datasets on disk" },
+    { kind: "nav", id: "nav:queue",     label: "Queue",     view: "queue",     icon: ListChecks,    hint: "Active downloads" },
+    { kind: "nav", id: "nav:schedules", label: "Schedules", view: "schedules", icon: CalendarClock, hint: "Recurring downloads" },
+    { kind: "nav", id: "nav:settings",  label: "Settings",  view: "settings",  icon: SettingsIcon,  hint: "Account & storage" },
   ];
 
   let query = $state("");
@@ -64,6 +68,7 @@
       const d = datasetFromCatalogue(e);
       return {
         kind: "dataset" as const,
+        id: `dataset:${d.id}`,
         label: d.title,
         dataset: d,
         hint: `${d.assetClass.toUpperCase()} · ${e.name}`,
@@ -72,28 +77,47 @@
     }),
   );
 
-  const symbolItems = $derived<Item[]>(
-    [
-      ...app.symbols.stockSymbols.map((s) => ({
-        kind: "symbol" as const,
+  // The symbol caches hold tens of thousands of tickers, and this runs
+  // on every keystroke. Match first and build objects only for the
+  // handful that survive, rather than materialising 42,000 items and
+  // throwing all but eighty away.
+  const SYMBOL_LIMIT = 40;
+
+  function pickSymbols(
+    source: string[],
+    q: string,
+    hint: string,
+    prefix: string,
+    icon: typeof Search,
+  ): Item[] {
+    const out: Item[] = [];
+    for (const s of source) {
+      if (q && !s.toLowerCase().includes(q)) continue;
+      out.push({
+        kind: "symbol",
+        id: `${prefix}:${s}`,
         label: s,
         symbol: s,
-        hint: "Stock",
-        icon: TrendingUp,
-      })),
-      ...app.symbols.optionRoots.map((s) => ({
-        kind: "symbol" as const,
-        label: s,
-        symbol: s,
-        hint: "Option root",
-        icon: BarChart2,
-      })),
-    ].slice(0, 80),
-  );
+        hint,
+        icon,
+      });
+      if (out.length >= SYMBOL_LIMIT) break;
+    }
+    return out;
+  }
+
+  const symbolItems = $derived.by<Item[]>(() => {
+    const q = query.trim().toLowerCase();
+    return [
+      ...pickSymbols(app.symbols.stockSymbols, q, "Stock", "stock", TrendingUp),
+      ...pickSymbols(app.symbols.optionRoots, q, "Option root", "root", BarChart2),
+    ];
+  });
 
   const savedItems = $derived<Item[]>(
     listSavedSearches().map((s) => ({
       kind: "saved" as const,
+      id: `saved:${s.id}`,
       label: s.name,
       saved: s,
       hint: `${s.symbols.length === 1 ? s.symbols[0] : `${s.symbols.length} symbols`} · ${s.kind}`,
@@ -228,7 +252,7 @@
             {/if}
           </li>
         {/if}
-        {#each filtered as item, i (item.kind + ":" + item.label)}
+        {#each filtered as item, i (item.id)}
           {@const Icon = item.icon}
           <!-- Keyboard lives on the input via `aria-activedescendant`,
                which is the combobox pattern; the pointer handlers here

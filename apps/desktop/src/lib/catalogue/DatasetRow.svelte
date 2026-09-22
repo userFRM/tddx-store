@@ -83,14 +83,23 @@
     expanded = !expanded;
   }
 
+  // Step 3 is a picker, so the row's primary action is picking. It used
+  // to only toggle the detail panel, which left selection reachable
+  // solely through the "Use this dataset" button two clicks in — while
+  // the leading dot rendered as a radio that did nothing when clicked.
+  // The chevron still owns expand/collapse on its own.
   function handleRowClick() {
-    expanded = !expanded;
+    if (gated) {
+      expanded = true;
+      return;
+    }
+    onselect(entry.name);
   }
 
   function handleRowKeydown(e: KeyboardEvent) {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      expanded = !expanded;
+      handleRowClick();
     }
     if (e.key === "Escape" && expanded) {
       expanded = false;
@@ -132,7 +141,7 @@
     class="row-header"
     role="button"
     tabindex={0}
-    aria-expanded={expanded}
+    aria-pressed={selected}
     aria-label="{entry.summary || entry.name}{gated ? ` — requires ${effectiveTier}` : ''}"
     onclick={handleRowClick}
     onkeydown={handleRowKeydown}
