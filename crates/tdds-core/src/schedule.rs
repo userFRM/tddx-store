@@ -318,3 +318,103 @@ mod tests {
         assert!(!schedule("daily", "half past five").should_fire(now));
     }
 }
+
+/// US equity/options data is settled on an Eastern-time clock, and this
+/// is well after the 16:00 close and the 16:15 index close — late
+/// enough that a session's history has been written upstream.
+const SESSION_AVAILABLE_AFTER: NaiveTime = match NaiveTime::from_hms_opt(18, 0, 0) {
+    Some(t) => t,
+    None => unreachable!(),
+};
+
+/// The most recent trading session whose data a schedule can expect to
+/// find, as of `now`.
+///
+/// A schedule fires on the user's own clock, but which session is
+/// *available* is an Eastern-time question, so the two are resolved
+/// separately. Firing at 17:30 local used to queue "local yesterday"
+/// unconditionally: on a Tuesday evening that asked for Monday, so an
+/// evening schedule ran a full day behind forever, and a schedule set
+/// for Monday morning asked for Sunday and got nothing at all.
+///
+/// Weekends roll back to Friday. Market holidays are not modelled —
+/// the server returns no rows for one, the task is recorded empty, and
+/// the next fire moves on; encoding a holiday calendar here would age
+/// badly for no gain.
+pub fn last_available_session(now: DateTime<Utc>) -> Option<chrono::NaiveDate> {
+    let et = now.with_timezone(&chrono_tz::America::New_York);
+    let mut date = if et.time() >= SESSION_AVAILABLE_AFTER {
+        et.date_naive()
+    } else {
+        et.date_naive().pred_opt()?
+    };
+    while matches!(date.weekday(), Weekday::Sat | Weekday::Sun) {
+        date = date.pred_opt()?;
+    }
+    Some(date)
+}
+
+#[cfg(test)]
+mod session_tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn et(y: i32, m: u32, d: u32, h: u32, min: u32) -> DateTime<Utc> {
+        chrono_tz::America::New_York
+            .with_ymd_and_hms(y, m, d, h, min, 0)
+            .single()
+            .expect("unambiguous local time")
+            .with_timezone(&Utc)
+    }
+
+    /// 2026-09-22 is a Tuesday.
+    #[test]
+    fn an_evening_fire_gets_todays_session() {
+        assert_eq!(
+            last_available_session(et(2026, 9, 22, 19, 30)),
+            chrono::NaiveDate::from_ymd_opt(2026, 9, 22),
+        );
+    }
+
+    #[test]
+    fn a_fire_before_settlement_gets_the_previous_session() {
+        // 09:00 ET Tuesday — Tuesday's session has not happened yet.
+        assert_eq!(
+            last_available_session(et(2026, 9, 22, 9, 0)),
+            chrono::NaiveDate::from_ymd_opt(2026, 9, 21),
+        );
+    }
+
+    /// The old behaviour's worst case: a Monday-morning schedule asked
+    /// for Sunday, which never has data.
+    #[test]
+    fn a_monday_morning_fire_gets_friday_not_sunday() {
+        let monday = et(2026, 9, 21, 8, 0);
+        let got = last_available_session(monday).expect("a session exists");
+        assert_eq!(got, chrono::NaiveDate::from_ymd_opt(2026, 9, 18).unwrap());
+        assert_eq!(got.weekday(), Weekday::Fri);
+    }
+
+    #[test]
+    fn a_weekend_fire_rolls_back_to_friday() {
+        for (day, hour) in [(19u32, 20u32), (20, 20)] {
+            let got = last_available_session(et(2026, 9, day, hour, 0)).expect("a session exists");
+            assert_eq!(got.weekday(), Weekday::Fri, "day {day}");
+        }
+    }
+
+    /// The boundary is Eastern, not local: the same instant resolves
+    /// the same session wherever the machine's clock is set.
+    #[test]
+    fn the_boundary_is_eastern_regardless_of_machine_timezone() {
+        // 17:59 ET is before the cutoff, 18:01 ET is after it.
+        assert_eq!(
+            last_available_session(et(2026, 9, 22, 17, 59)),
+            chrono::NaiveDate::from_ymd_opt(2026, 9, 21),
+        );
+        assert_eq!(
+            last_available_session(et(2026, 9, 22, 18, 1)),
+            chrono::NaiveDate::from_ymd_opt(2026, 9, 22),
+        );
+    }
+}

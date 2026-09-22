@@ -129,12 +129,11 @@ async fn tick(state: &AppState) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     for row in rows {
-        // The pull covers the previous day: a schedule that fires in the
-        // evening is after that session's close, and one that fires in
-        // the morning is before the current session has anything to
-        // fetch. The queue skips a file that is already on disk, so a
+        // Which session is available is an Eastern-time question, and
+        // separate from the local-clock time the user picked to fire
+        // at. The queue skips a file that is already on disk, so a
         // re-fire costs nothing.
-        let Some(date) = now.with_timezone(&chrono::Local).date_naive().pred_opt() else {
+        let Some(date) = schedule::last_available_session(now) else {
             continue;
         };
         let spec = DataSpec {

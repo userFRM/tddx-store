@@ -13,7 +13,7 @@
    * Sticky footer summarises selection and exposes Queue button.
    */
 
-  import { Loader2, Check, ArrowUpRight, Bookmark, Plus } from "lucide-svelte";
+  import { Loader2, Check, ArrowUpRight, Bookmark, Plus, Play } from "lucide-svelte";
   import AssetClassPicker from "$lib/catalogue/AssetClassPicker.svelte";
   import FlatfilesShelf from "$lib/runners/FlatfilesShelf.svelte";
   import IndexPresetsShelf from "$lib/runners/IndexPresetsShelf.svelte";
@@ -24,7 +24,7 @@
   import SmartFilters from "$lib/catalogue/SmartFilters.svelte";
   import ParamForm from "$lib/catalogue/ParamForm.svelte";
   import { api, type EnqueueArgs } from "$lib/api";
-  import { app, tierForKind, log, type AssetClass, refreshQueueSnapshot } from "$lib/stores/app.svelte";
+  import { app, tierForKind, log, type AssetClass, refreshQueueSnapshot, openEndpointRunner} from "$lib/stores/app.svelte";
   import { saveSearch } from "$lib/persistence/savedSearches";
   import { openUrl } from "@tauri-apps/plugin-opener";
 
@@ -39,6 +39,27 @@
 
   // Shared param values map — written to by SmartFilters and ParamForm
   let paramValues = $state<Record<string, string>>({});
+
+  /** Apply a hand-over from another view (Library's "Download more
+   *  dates", a dataset detail page) exactly once, then clear it so
+   *  navigating back to Browse later does not re-apply a stale
+   *  selection. */
+  $effect(() => {
+    const intent = app.browseIntent;
+    if (!intent) return;
+    app.browseIntent = null;
+    assetClass = assetClassOf(intent.kind);
+    kindId = intent.kind;
+    if (intent.symbol) symbols = [intent.symbol];
+    paramValues = {};
+  });
+
+  function assetClassOf(kind: string): AssetClass {
+    if (kind.startsWith("option_")) return "option";
+    if (kind.startsWith("index_")) return "index";
+    if (kind.startsWith("rate_") || kind.startsWith("interest_")) return "rate";
+    return "stock";
+  }
 
   // ── Queue state ───────────────────────────────────────────────
   type QueueStatus = "idle" | "queuing" | "done" | "error";
@@ -103,6 +124,24 @@
     !hasRange && selectedParams.some((p) => p.name === "date")
   );
   const showRange = $derived(hasRange || hasPointDate);
+  /** Some endpoints answer a question ("which expirations exist for
+   *  SPX?") instead of producing a per-day dataset — the nine `list`
+   *  endpoints and the calendar lookups. They declare no date axis at
+   *  all, so the queue has nothing to fan out over and `enqueue`
+   *  rejects them with "pass date or start+end". Browse used to let the
+   *  user reach a fully-enabled Queue button for these and then fail
+   *  every time; they run one-shot instead.
+   *
+   *  Keyed on the absence of a date parameter rather than on a
+   *  subcategory name, so an endpoint that grows one stops being
+   *  run-once without an edit here. */
+  const isRunOnce = $derived(!!kindId && !showRange);
+  /** `stock_list_symbols` and `option_list_symbols` take no arguments
+   *  at all — requiring a symbol for them would block the only thing
+   *  they do. */
+  const needsSymbol = $derived(
+    selectedParams.some((p) => p.name === "symbol" || p.name === "root"),
+  );
   const showInterval = $derived(
     selectedParams.some((p) =>
       p.name === "start_time" || p.name === "end_time" || p.name === "interval"
@@ -150,8 +189,28 @@
   });
 
   const readyToQueue = $derived(
-    symbols.length > 0 && !!kindId && !gated && (!showRange || (!!start && !!end))
+    symbols.length > 0 && !!kindId && !gated && !isRunOnce && (!showRange || (!!start && !!end))
   );
+  /** The run-once equivalent: one symbol is all a list endpoint needs,
+   *  and the argument-free ones need not even that. */
+  const readyToRun = $derived(
+    !!kindId && !gated && isRunOnce && (!needsSymbol || symbols.length > 0),
+  );
+
+  function runOnce() {
+    const args: Record<string, string> = { ...extraArgs() };
+    for (const p of selectedParams) {
+      if (p.name === "symbol" || p.name === "root") {
+        if (symbols[0]) args[p.name] = symbols[0];
+      }
+      else if (p.name === "expiration" && paramValues["expiration"]) {
+        args[p.name] = paramValues["expiration"];
+      } else if (paramValues[p.name]) {
+        args[p.name] = String(paramValues[p.name]);
+      }
+    }
+    openEndpointRunner(kindId, args, format);
+  }
 
   /** Estimated number of queue tasks the current selection will fan
    *  out into. Range endpoints (`start_date`+`end_date`) ship one
@@ -559,6 +618,12 @@
             </span>
           {/if}
         </span>
+      {:else if isRunOnce}
+        <span class="summary-placeholder">
+          {readyToRun
+            ? `${summaryKindTitle} answers one question — it runs once and writes a file, rather than queueing per-day tasks.`
+            : "Pick a symbol to run this lookup."}
+        </span>
       {:else}
         <span class="summary-placeholder">Complete the steps above to queue a download.</span>
       {/if}
@@ -588,6 +653,17 @@
         >
           <ArrowUpRight size={16} strokeWidth={1.75} />
           Upgrade to {upgradeRequiredTier}
+        </button>
+      {:else if isRunOnce}
+        <button
+          type="button"
+          class="btn btn-primary queue-btn"
+          onclick={runOnce}
+          disabled={!readyToRun}
+          aria-label="Run endpoint once"
+        >
+          <Play size={16} strokeWidth={1.75} />
+          Run once
         </button>
       {:else}
         <button

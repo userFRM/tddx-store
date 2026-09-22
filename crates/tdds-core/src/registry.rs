@@ -113,7 +113,7 @@ pub async fn dispatch_to_arrow(
     spec: &EndpointSpec,
 ) -> crate::Result<Option<RecordBatch>> {
     let output = dispatch_raw(client, spec).await?;
-    Ok(arrow_from_output(&output))
+    arrow_from_output(&output)
 }
 
 /// Low-level: invoke the endpoint and return the typed `EndpointOutput`.
@@ -151,39 +151,48 @@ pub async fn dispatch_raw(client: &Client, spec: &EndpointSpec) -> crate::Result
 }
 
 /// Convert any `EndpointOutput` variant that carries tick data into a
-/// `RecordBatch`. `StringList` and similar non-tick outputs return `None`.
+/// `RecordBatch`.
+///
+/// `Ok(None)` means the output has no Arrow representation at all — a
+/// `StringList` is a list of names, not a table. A conversion that was
+/// attempted and failed is an `Err`, not a `None`: the two used to be
+/// collapsed with `.ok()`, which made the worker mark a task "empty"
+/// and move on whenever a response failed to decode. The user was told
+/// there was no data for that day when in fact the data had arrived and
+/// could not be read.
 ///
 /// Every arm goes through `Ticks::to_arrow`, which projects to the columns
 /// the response actually carried. The slice-level `TicksArrowExt::to_arrow`
 /// emits the tick type's full schema instead, so an equity response would
 /// gain always-null contract-identity columns and a gRPC trade response
 /// would gain four always-zero flag columns that the wire never sent.
-pub fn arrow_from_output(out: &EndpointOutput) -> Option<RecordBatch> {
+pub fn arrow_from_output(out: &EndpointOutput) -> crate::Result<Option<RecordBatch>> {
     use EndpointOutput::*;
-    match out {
-        StringList(_) => None,
-        EodTicks(v) => v.to_arrow().ok(),
-        OhlcTicks(v) => v.to_arrow().ok(),
-        TradeTicks(v) => v.to_arrow().ok(),
-        QuoteTicks(v) => v.to_arrow().ok(),
-        TradeQuoteTicks(v) => v.to_arrow().ok(),
-        OpenInterestTicks(v) => v.to_arrow().ok(),
-        MarketValueTicks(v) => v.to_arrow().ok(),
-        GreeksAllTicks(v) => v.to_arrow().ok(),
-        GreeksEodTicks(v) => v.to_arrow().ok(),
-        GreeksFirstOrderTicks(v) => v.to_arrow().ok(),
-        GreeksSecondOrderTicks(v) => v.to_arrow().ok(),
-        GreeksThirdOrderTicks(v) => v.to_arrow().ok(),
-        TradeGreeksAllTicks(v) => v.to_arrow().ok(),
-        TradeGreeksFirstOrderTicks(v) => v.to_arrow().ok(),
-        TradeGreeksSecondOrderTicks(v) => v.to_arrow().ok(),
-        TradeGreeksThirdOrderTicks(v) => v.to_arrow().ok(),
-        TradeGreeksImpliedVolatilityTicks(v) => v.to_arrow().ok(),
-        IvTicks(v) => v.to_arrow().ok(),
-        PriceTicks(v) => v.to_arrow().ok(),
-        IndexPriceAtTimeTicks(v) => v.to_arrow().ok(),
-        CalendarDays(v) => v.to_arrow().ok(),
-        InterestRateTicks(v) => v.to_arrow().ok(),
-        OptionContracts(v) => v.to_arrow().ok(),
-    }
+    let batch = match out {
+        StringList(_) => return Ok(None),
+        EodTicks(v) => v.to_arrow()?,
+        OhlcTicks(v) => v.to_arrow()?,
+        TradeTicks(v) => v.to_arrow()?,
+        QuoteTicks(v) => v.to_arrow()?,
+        TradeQuoteTicks(v) => v.to_arrow()?,
+        OpenInterestTicks(v) => v.to_arrow()?,
+        MarketValueTicks(v) => v.to_arrow()?,
+        GreeksAllTicks(v) => v.to_arrow()?,
+        GreeksEodTicks(v) => v.to_arrow()?,
+        GreeksFirstOrderTicks(v) => v.to_arrow()?,
+        GreeksSecondOrderTicks(v) => v.to_arrow()?,
+        GreeksThirdOrderTicks(v) => v.to_arrow()?,
+        TradeGreeksAllTicks(v) => v.to_arrow()?,
+        TradeGreeksFirstOrderTicks(v) => v.to_arrow()?,
+        TradeGreeksSecondOrderTicks(v) => v.to_arrow()?,
+        TradeGreeksThirdOrderTicks(v) => v.to_arrow()?,
+        TradeGreeksImpliedVolatilityTicks(v) => v.to_arrow()?,
+        IvTicks(v) => v.to_arrow()?,
+        PriceTicks(v) => v.to_arrow()?,
+        IndexPriceAtTimeTicks(v) => v.to_arrow()?,
+        CalendarDays(v) => v.to_arrow()?,
+        InterestRateTicks(v) => v.to_arrow()?,
+        OptionContracts(v) => v.to_arrow()?,
+    };
+    Ok(Some(batch))
 }

@@ -9,10 +9,12 @@
     ArrowRight,
     Library,
     Diff,
+    Database,
   } from "lucide-svelte";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
+  import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import { api, fmtBytes, fmtNum, type Coverage } from "$lib/api";
-  import { app, navigate, log, composer, refreshQueueSnapshot } from "$lib/stores/app.svelte";
+  import { app, navigate, log, refreshQueueSnapshot, browseTo, loadCoverage } from "$lib/stores/app.svelte";
   import { onMount } from "svelte";
   import CoverageDiff from "$lib/queue/CoverageDiff.svelte";
 
@@ -25,8 +27,8 @@
     recent: "Most recent",
   };
 
-  let coverage = $state<Coverage[]>([]);
-  let loading = $state(true);
+  const coverage = $derived(app.coverage);
+  const loading = $derived(app.coverageLoading && app.coverage.length === 0);
   let rowMsg = $state("");
   let sortKey = $state<SortKey>("symbol");
   let busy = $state(false);
@@ -54,6 +56,26 @@
     setTimeout(() => (rowMsg = ""), 3000);
   }
 
+  /** Copy a DuckDB bootstrap script that exposes every dataset on disk
+   *  as a queryable view. A downloader whose output cannot be opened is
+   *  half a tool; this is the shortest path from "downloaded" to
+   *  "queried" without the app growing a SQL console. */
+  async function copyDuckDbScript() {
+    busy = true;
+    try {
+      const { sql } = await api.duckdbCommand(app.settings.output_dir);
+      await writeText(sql);
+      rowMsg = "DuckDB script copied — paste it into a duckdb session";
+      log("info", rowMsg);
+    } catch (e: unknown) {
+      rowMsg = e instanceof Error ? e.message : String(e);
+      log("error", `DuckDB export failed: ${rowMsg}`);
+    } finally {
+      busy = false;
+      setTimeout(() => (rowMsg = ""), 4000);
+    }
+  }
+
   /** Reveal the dataset's directory in the OS file manager. */
   async function revealKindDir(row: Coverage) {
     try {
@@ -70,15 +92,9 @@
   let filterQuery = $state("");
   let expandedSymbols = $state<Set<string>>(new Set());
 
-  onMount(async () => {
-    try {
-      coverage = await api.coverage();
-    } catch {
-      // not connected
-    } finally {
-      loading = false;
-    }
-  });
+  // Shared with Home, and invalidated by the queue poll when a task
+  // finishes, so the numbers here do not go stale behind a download.
+  onMount(() => void loadCoverage());
 
   // Group by symbol, filtering on the symbol AND the dataset, because
   // "show me everything with greeks" is as common a question as
@@ -270,13 +286,6 @@
 
   let neverOpen = $state(false);
 
-  /** Open Browse with the composer already pointed at this dataset and
-   *  symbol, rather than dropping the user on an empty form. */
-  function browseTo(kind: string, symbol = "") {
-    composer.symbol = symbol;
-    navigate("browse");
-  }
-
   // First sentence of description
   function firstSentence(desc: string): string {
     if (!desc) return "";
@@ -305,6 +314,18 @@
       {#if grouped.length > 0}
         <button class="btn btn-ghost" onclick={toggleAll}>
           {allExpanded ? "Collapse all" : "Expand all"}
+        </button>
+      {/if}
+
+      {#if coverage.length > 0}
+        <button
+          class="btn btn-ghost"
+          onclick={copyDuckDbScript}
+          disabled={busy}
+          title="Copy a DuckDB script that views every dataset on disk"
+        >
+          <Database size={14} strokeWidth={1.75} aria-hidden="true" />
+          DuckDB
         </button>
       {/if}
 

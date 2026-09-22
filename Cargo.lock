@@ -7368,6 +7368,7 @@ dependencies = [
  "arrow-schema 59.3.0",
  "async-trait",
  "chrono",
+ "chrono-tz",
  "futures",
  "parquet 59.3.0",
  "reqwest",

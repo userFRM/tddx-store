@@ -22,36 +22,19 @@
     Database,
     Clock,
   } from "lucide-svelte";
-  import { onMount } from "svelte";
-  import { app, navigate } from "$lib/stores/app.svelte";
-  import { api, fmtBytes, type Coverage, type TierName } from "$lib/api";
+  import { app, navigate, loadCoverage } from "$lib/stores/app.svelte";
+  import { fmtBytes, type TierName } from "$lib/api";
   import { openUrl } from "@tauri-apps/plugin-opener";
 
   // ── Library snapshot ─────────────────────────────────────────
-  let coverage = $state<Coverage[]>([]);
-  let coverageLoading = $state(false);
+  const coverage = $derived(app.coverage);
+  const coverageLoading = $derived(app.coverageLoading);
 
-  onMount(async () => {
-    if (app.connState !== "connected") return;
-    coverageLoading = true;
-    try {
-      coverage = await api.coverage();
-    } catch {
-      // not yet connected — silently skip
-    } finally {
-      coverageLoading = false;
-    }
-  });
-
-  // Re-fetch when connection is established mid-session.
+  // Shared with the Library view and invalidated by the queue poll when
+  // a task finishes, so this card does not keep showing pre-download
+  // numbers. Connecting mid-session triggers the same load.
   $effect(() => {
-    if (app.connState === "connected" && coverage.length === 0 && !coverageLoading) {
-      coverageLoading = true;
-      api.coverage()
-        .then((r) => { coverage = r; })
-        .catch(() => {})
-        .finally(() => { coverageLoading = false; });
-    }
+    if (app.connState === "connected") void loadCoverage();
   });
 
   // ── Derived stats ─────────────────────────────────────────────

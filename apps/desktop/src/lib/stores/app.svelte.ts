@@ -17,6 +17,7 @@ import {
   tierMeets,
   TIER_RANK,
   type CatalogueEntry,
+  type Coverage,
   type EndpointInfo,
   type QueueSnapshot,
   type Settings,
@@ -157,6 +158,14 @@ interface AppState {
   // YAML-driven endpoint catalogue (loaded on connect)
   catalogue: CatalogueEntry[];
   catalogueLoading: boolean;
+  /** A dataset + symbol another view wants Browse to open on. Browse
+   *  consumes it once and clears it. */
+  browseIntent: { kind: string; symbol: string } | null;
+  /** What is on disk. Shared rather than per-view so Home and Library
+   *  cannot disagree, and so a finished download can invalidate it in
+   *  one place. */
+  coverage: Coverage[];
+  coverageLoading: boolean;
 }
 
 export interface EndpointRunnerState {
@@ -231,6 +240,9 @@ export const app = $state<AppState>({
   tierVerdicts: [],
   catalogue: [],
   catalogueLoading: false,
+  browseIntent: null,
+  coverage: [],
+  coverageLoading: false,
 });
 
 // ── Theme ─────────────────────────────────────────────────────
@@ -539,6 +551,18 @@ export function navigate(v: View) {
   app.currentView = v;
   if (v !== "detail") app.detailDataset = null;
 }
+/** Open Browse already pointed at `kind` (and optionally a symbol).
+ *
+ *  Browse owns its step state locally, so a caller cannot reach in and
+ *  set it; it hands over an intent instead and Browse applies it. The
+ *  Library's "Download more dates" used to call a helper that took a
+ *  `kind` and ignored it, dropping the user on whatever Browse had
+ *  selected last. */
+export function browseTo(kind: string, symbol = "") {
+  app.browseIntent = { kind, symbol };
+  navigate("browse");
+}
+
 export function openDetail(d: DatasetMeta) {
   app.detailDataset = d;
   app.currentView = "detail";
@@ -617,9 +641,39 @@ function _queueBusy(): boolean {
 
 async function _pollOnce() {
   try {
-    app.queueSnap = await api.snapshot();
+    const snap = await api.snapshot();
+    const finishedBefore = _finishedCount(app.queueSnap);
+    app.queueSnap = snap;
+    // A task that just finished changed what is on disk. Coverage was
+    // fetched once per view on mount, so until this the Library and the
+    // Home dashboard kept showing pre-download numbers until the user
+    // navigated away and back.
+    if (_finishedCount(snap) > finishedBefore) void loadCoverage(true);
   } catch {
     // pre-connect; silently drop
+  }
+}
+
+function _finishedCount(snap: QueueSnapshot | null): number {
+  if (!snap) return 0;
+  return snap.counts
+    .filter(([status]) => status === "done" || status === "empty" || status === "failed")
+    .reduce((sum, [, n]) => sum + n, 0);
+}
+
+/** Refresh what is on disk. `force` re-fetches even when a copy is
+ *  already held; without it the call is a no-op once loaded, which is
+ *  what view mounts want. */
+export async function loadCoverage(force = false) {
+  if (app.coverageLoading) return;
+  if (!force && app.coverage.length > 0) return;
+  app.coverageLoading = true;
+  try {
+    app.coverage = await api.coverage();
+  } catch {
+    // not connected yet
+  } finally {
+    app.coverageLoading = false;
   }
 }
 
@@ -807,6 +861,41 @@ export function openIndexPreset(p: IndexPresetView) {
 }
 export function closeIndexPreset() {
   app.presetOpen = false;
+}
+
+/** Open the one-shot dispatcher on `name`, pre-filling whatever
+ *  arguments the caller already knows.
+ *
+ *  List endpoints (`option_list_expirations`, `stock_list_dates`, …)
+ *  answer a question rather than produce a per-day dataset: they take
+ *  no date range, so there is nothing for the queue to fan out over
+ *  and `enqueue` rejects them outright. They belong here instead. */
+export function openEndpointRunner(
+  name: string,
+  args: Record<string, string> = {},
+  format: "parquet" | "csv" | "jsonl" | "json" = "csv",
+) {
+  const endpoint = app.catalogue.find((e) => e.name === name);
+  if (!endpoint) {
+    log("error", `Unknown endpoint ${name}`);
+    return;
+  }
+  app.endpointRunner = {
+    endpoint: {
+      name: endpoint.name,
+      description: endpoint.description,
+      category: endpoint.category,
+      subcategory: endpoint.subcategory,
+      rest_path: endpoint.rest_path,
+      returns: endpoint.returns,
+      params: endpoint.params,
+    },
+    args,
+    format,
+    busy: false,
+    msg: "",
+  };
+  app.endpointRunnerOpen = true;
 }
 
 // ── Settings ─────────────────────────────────────────────────

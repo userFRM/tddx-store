@@ -7,8 +7,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use tdds_core::{
-    all_endpoints, dispatch_to_file, endpoint_catalogue, find_endpoint, format::OutputFormat,
-    EndpointInfo, EndpointMeta, EndpointSpec, IntervalOption, INTERVALS,
+    all_endpoints, dispatch_to_file, endpoint_catalogue, format::OutputFormat, EndpointInfo,
+    EndpointMeta, EndpointSpec, IntervalOption, INTERVALS,
 };
 
 use crate::state::AppState;
@@ -16,11 +16,6 @@ use crate::state::AppState;
 #[tauri::command]
 pub async fn endpoints_list() -> Result<Vec<EndpointInfo>, String> {
     Ok(all_endpoints())
-}
-
-#[tauri::command]
-pub async fn endpoints_get(name: String) -> Result<Option<EndpointInfo>, String> {
-    Ok(find_endpoint(&name))
 }
 
 /// The sampling intervals the interval-taking endpoints accept, in

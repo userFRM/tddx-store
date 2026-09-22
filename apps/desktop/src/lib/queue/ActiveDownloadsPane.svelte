@@ -125,12 +125,25 @@
   // connected, queue db locked, no failed rows — so the failure has to
   // reach them. Swallowing it left the button looking broken.
   let busy = $state(false);
+  /** Whether a worker pool is already in flight. `run_queue` returns
+   *  false rather than erroring when one is, so without this the Start
+   *  button looks available during a run and does nothing when
+   *  clicked. Polled alongside the queue snapshot. */
+  let poolActive = $state(false);
+  $effect(() => {
+    void app.queueSnap;
+    api.workerPoolActive()
+      .then((v) => (poolActive = v))
+      .catch(() => {});
+  });
+
   async function startWorkers() {
     busy = true;
     try {
-      await api.runQueue();
+      const started = await api.runQueue();
       await refreshQueueSnapshot();
-      log("info", "Workers started");
+      poolActive = true;
+      log("info", started ? "Workers started" : "Workers are already running");
     } catch (e) {
       log("error", `Could not start workers: ${errText(e)}`);
     } finally {
@@ -187,7 +200,7 @@
       <span class="text-caption">Downloads</span>
       <div class="pane-actions">
         {#if pending > 0 && running.length === 0}
-          <button class="btn-icon" onclick={startWorkers} disabled={busy} title="Start workers">
+          <button class="btn-icon" onclick={startWorkers} disabled={busy || poolActive} title={poolActive ? "Workers already running" : "Start workers"}>
             <Play size={14} />
           </button>
         {/if}
@@ -275,7 +288,7 @@
         <div class="empty-active">
           <Pause size={20} />
           <p class="text-body-sm fg-muted">{fmtNum(pending)} queued — workers idle.</p>
-          <button class="btn btn-primary" onclick={startWorkers} disabled={busy}>
+          <button class="btn btn-primary" onclick={startWorkers} disabled={busy || poolActive}>
             <Play size={14} fill="currentColor" />
             Start
           </button>

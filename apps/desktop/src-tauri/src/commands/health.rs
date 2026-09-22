@@ -86,11 +86,3 @@ pub async fn health(
         thetadatadx_version: env!("TDDS_THETADATADX_VERSION").to_string(),
     })
 }
-
-#[tauri::command]
-pub async fn sdk_version(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    Ok(serde_json::json!({
-        "desktop":     app.package_info().version.to_string(),
-        "thetadatadx": env!("TDDS_THETADATADX_VERSION"),
-    }))
-}

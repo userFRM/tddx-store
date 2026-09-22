@@ -184,9 +184,7 @@ export const api = {
   health: () => invoke<HealthSnapshot>("health"),
   duckdbCommand: (output_dir: string) =>
     invoke<{ sql: string; path: string; hint: string }>("duckdb_command", { output_dir }),
-  sdkVersion: () => invoke<{ desktop: string; thetadatadx: string }>("sdk_version"),
   endpointsList: () => invoke<EndpointInfo[]>("endpoints_list"),
-  endpointsGet: (name: string) => invoke<EndpointInfo>("endpoints_get", { name }),
   intervalOptions: () => invoke<IntervalOption[]>("interval_options"),
   endpointInvoke: (args: InvokeArgs) => invoke<number>("endpoint_invoke", { args }),
   listQuery: (args: ListQueryArgs) => invoke<string[]>("list_query", { args }),
