@@ -1,101 +1,109 @@
-//! What to download. A `DataSpec` is one (kind × symbol × date) work unit.
+//! What to download. A `DataSpec` is one (dataset x symbol x date) work
+//! unit; an `EndpointSpec` is the generic registry call it lowers onto.
 //!
-//! There are two layers:
-//!
-//! - `DataKind` — the seven "core" tick endpoints we keep first-class
-//!   for legacy code paths and the simple `add` CLI. Hardcoded match.
-//! - `EndpointSpec` — generic registry-backed spec covering every one of
-//!   thetadatadx's 61 endpoints (history / snapshot / list / at_time /
-//!   greeks). Positional required params + fluent optionals are both
-//!   handled by `thetadatadx::invoke_endpoint`.
+//! Both name a dataset the same way the catalogue does: by its registry
+//! endpoint (`stock_history_trade`, `option_history_greeks_all`, ...).
+//! There is deliberately no second, shorter list of "core" kinds — the
+//! catalogue offered every registry dataset while the queue accepted
+//! seven names, and
+//! every dataset outside that overlap failed to queue at all.
 
 use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
-/// All ThetaData historical endpoints we expose.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DataKind {
-    StockTrade,
-    StockQuote,
-    StockTradeQuote,
-    OptionTrade,
-    OptionQuote,
-    OptionTradeQuote,
-    OptionOpenInterest,
-}
+/// The dataset a task pulls, named by its registry endpoint.
+///
+/// Construct with [`DataKind::parse`], which accepts a name only if the
+/// registry knows it. That keeps an unknown dataset out of the queue at
+/// the boundary instead of failing later against the server.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct DataKind(String);
+
+/// Dataset names this app used before the queue and the catalogue
+/// shared one vocabulary. Queue rows, schedules and on-disk directories
+/// written by those builds still carry them, so they keep resolving.
+const LEGACY_ALIASES: &[(&str, &str)] = &[
+    ("stock_trade", "stock_history_trade"),
+    ("stock_quote", "stock_history_quote"),
+    ("stock_trade_quote", "stock_history_trade_quote"),
+    ("option_trade", "option_history_trade"),
+    ("option_quote", "option_history_quote"),
+    ("option_trade_quote", "option_history_trade_quote"),
+    ("option_oi", "option_history_open_interest"),
+];
 
 impl DataKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            DataKind::StockTrade => "stock_trade",
-            DataKind::StockQuote => "stock_quote",
-            DataKind::StockTradeQuote => "stock_trade_quote",
-            DataKind::OptionTrade => "option_trade",
-            DataKind::OptionQuote => "option_quote",
-            DataKind::OptionTradeQuote => "option_trade_quote",
-            DataKind::OptionOpenInterest => "option_oi",
-        }
-    }
-
+    /// Resolve a dataset name against the registry. Legacy names are
+    /// translated first; anything the registry does not know returns
+    /// `None`.
     pub fn parse(s: &str) -> Option<Self> {
-        Some(match s {
-            "stock_trade" => DataKind::StockTrade,
-            "stock_quote" => DataKind::StockQuote,
-            "stock_trade_quote" => DataKind::StockTradeQuote,
-            "option_trade" => DataKind::OptionTrade,
-            "option_quote" => DataKind::OptionQuote,
-            "option_trade_quote" => DataKind::OptionTradeQuote,
-            "option_oi" => DataKind::OptionOpenInterest,
-            _ => return None,
-        })
+        let name = LEGACY_ALIASES
+            .iter()
+            .find(|(legacy, _)| *legacy == s)
+            .map_or(s, |(_, current)| *current);
+        thetadatadx::find(name).map(|meta| Self(meta.name.to_string()))
     }
 
-    pub fn all() -> &'static [DataKind] {
-        &[
-            DataKind::StockTrade,
-            DataKind::StockQuote,
-            DataKind::StockTradeQuote,
-            DataKind::OptionTrade,
-            DataKind::OptionQuote,
-            DataKind::OptionTradeQuote,
-            DataKind::OptionOpenInterest,
-        ]
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 
-    pub fn is_option(self) -> bool {
-        matches!(
-            self,
-            DataKind::OptionTrade
-                | DataKind::OptionQuote
-                | DataKind::OptionTradeQuote
-                | DataKind::OptionOpenInterest
-        )
+    /// The registry endpoint this dataset dispatches to. Same string —
+    /// the dataset *is* the endpoint.
+    pub fn endpoint(&self) -> &str {
+        &self.0
     }
 
-    /// Which ThetaData asset-class pool this kind draws from. Drives
-    /// worker scheduling — each class has its own concurrency budget
-    /// sized by the user's per-class subscription tier.
-    pub fn asset_class(self) -> crate::tier::AssetClass {
-        if self.is_option() {
-            crate::tier::AssetClass::Option
-        } else {
-            crate::tier::AssetClass::Stock
+    fn meta(&self) -> Option<&'static thetadatadx::EndpointMeta> {
+        thetadatadx::find(&self.0)
+    }
+
+    /// Whether this endpoint declares `param`. Read from the registry so
+    /// a vendor-side parameter change needs no edit here.
+    pub fn takes_param(&self, param: &str) -> bool {
+        self.meta()
+            .is_some_and(|m| m.params.iter().any(|p| p.name == param))
+    }
+
+    pub fn takes_interval(&self) -> bool {
+        self.takes_param("interval")
+    }
+
+    pub fn is_option(&self) -> bool {
+        matches!(self.asset_class(), crate::tier::AssetClass::Option)
+    }
+
+    /// Which asset class gates this dataset, from the registry
+    /// category. Drives tier gating, not concurrency.
+    pub fn asset_class(&self) -> crate::tier::AssetClass {
+        match self.meta().map(|m| m.category).unwrap_or("") {
+            "option" => crate::tier::AssetClass::Option,
+            "index" => crate::tier::AssetClass::Index,
+            "rate" => crate::tier::AssetClass::Rate,
+            _ => crate::tier::AssetClass::Stock,
         }
     }
 }
 
-/// One unit of work: pull `kind` for `symbol` on calendar `date`. The optional
-/// `interval` and `expiration_filter` are used by quote / option calls.
+impl std::fmt::Display for DataKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// One unit of work: pull `kind` for `symbol` on that calendar `date`.
+/// The contract filters and `interval` are carried for every dataset and
+/// applied only where the endpoint declares the matching parameter.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataSpec {
     pub kind: DataKind,
     pub symbol: String,
     pub date: NaiveDate,
-    /// `interval="0"` = every NBBO update; `"1s"` = sampled. Only meaningful
-    /// for `*Quote` kinds.
+    /// `"tick"` = every update; `"1s"` and up are sampled. Applied only
+    /// to endpoints that declare an `interval` parameter.
     #[serde(default)]
     pub interval: Option<String>,
     /// `*` (default) = every expiration on this date.
@@ -110,6 +118,21 @@ pub struct DataSpec {
     /// Post-decode transforms applied before write (rename / drop / scale).
     #[serde(default)]
     pub transforms: crate::Transforms,
+    /// Every other endpoint parameter, by registry name.
+    ///
+    /// The six fields above are the ones a work unit is *keyed* on —
+    /// they decide what the file is called and how coverage groups it.
+    /// But endpoints declare far more than six: `max_dte`,
+    /// `strike_range`, `start_time`/`end_time`, `venue`, the greeks
+    /// inputs (`rate_type`, `annual_dividend`, `version`, …). Those are
+    /// request options rather than identity, so they live here as
+    /// registry-named strings and are applied in
+    /// [`Self::to_endpoint_spec`] to whichever of them the endpoint
+    /// actually declares. A key the endpoint does not declare is
+    /// ignored rather than rejected, which is what lets one saved
+    /// preset carry across related endpoints.
+    #[serde(default)]
+    pub extra: BTreeMap<String, String>,
 }
 
 fn default_expiration() -> String {
@@ -127,18 +150,395 @@ impl DataSpec {
         self.date.format("%Y%m%d").to_string()
     }
 
-    /// Stable file stem used everywhere on disk.
+    /// The part of a filename that distinguishes this pull from another
+    /// of the same dataset, symbol and date.
+    ///
+    /// Empty for a whole-chain default, so those files keep the name
+    /// they have always had and an existing library still scans. A
+    /// narrowed pull earns a suffix: without one, requesting one
+    /// expiration and then another writes to the same path, and the
+    /// second task sees a file already there and reports done having
+    /// fetched nothing.
+    pub fn file_qualifier(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if self.expiration != "*" && !self.expiration.is_empty() {
+            parts.push(format!("e{}", sanitize(&self.expiration)));
+        }
+        if self.strike != "*" && !self.strike.is_empty() {
+            parts.push(format!("k{}", sanitize(&self.strike)));
+        }
+        let right = self.right.to_lowercase();
+        if right != "both" && right != "*" && !right.is_empty() {
+            parts.push(sanitize(&right));
+        }
+        if let Some(interval) = self.interval.as_deref() {
+            let normalized = normalize_interval(interval);
+            if normalized != "tick" && !normalized.is_empty() {
+                parts.push(sanitize(&normalized));
+            }
+        }
+        // Same reasoning as the fields above: a pull narrowed by
+        // `strike_range=5` is not the same data as the unrestricted
+        // one, so it cannot share a filename with it.
+        for (k, v) in &self.extra {
+            if v.is_empty() || v == "*" {
+                continue;
+            }
+            parts.push(format!("{}-{}", sanitize(k), sanitize(v)));
+        }
+        parts.join("_")
+    }
+
+    /// Stable file stem used everywhere on disk. The date stays last so
+    /// `coverage::scan` can keep reading it off the end.
     pub fn file_stem(&self) -> String {
+        let qualifier = self.file_qualifier();
+        let middle = if qualifier.is_empty() {
+            String::new()
+        } else {
+            format!("{qualifier}_")
+        };
         format!(
-            "{}_{}_{}",
+            "{}_{}_{}{}",
             self.symbol.to_lowercase(),
             self.kind.as_str(),
+            middle,
             self.ymd()
         )
     }
+
+    /// Lower this work unit onto the generic registry spec, filling only
+    /// the parameters the endpoint actually declares.
+    ///
+    /// Queue tasks and the endpoint browser therefore share one
+    /// dispatcher, one argument-validation path, and one Arrow
+    /// projection. Driving the fill off the registry rather than off a
+    /// per-dataset match means an endpoint that grows a parameter picks
+    /// it up with no edit here, and one that lacks `strike` never
+    /// receives it.
+    pub fn to_endpoint_spec(&self) -> EndpointSpec {
+        let mut spec = EndpointSpec::new(self.kind.endpoint());
+        let Some(meta) = thetadatadx::find(self.kind.endpoint()) else {
+            return spec;
+        };
+        for p in meta.params {
+            let value = match p.name {
+                "symbol" => Some(self.symbol.clone()),
+                "date" => Some(self.ymd()),
+                "expiration" => Some(self.expiration.clone()),
+                "strike" => Some(self.strike.clone()),
+                "right" => Some(self.right.clone()),
+                "interval" => self.interval.clone(),
+                other => self.extra.get(other).cloned(),
+            };
+            if let Some(v) = value {
+                spec = spec.arg(p.name, v);
+            }
+        }
+        spec
+    }
 }
 
-/// Generic endpoint spec — covers all 61 thetadatadx endpoints via the
+/// One selectable sampling interval: the wire value the endpoint takes
+/// and the label the UI shows for it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct IntervalOption {
+    pub id: &'static str,
+    pub label: &'static str,
+}
+
+/// Every interval ThetaData accepts, in ascending order. These are wire
+/// values, not free text — the endpoint rejects anything outside this
+/// set, and `intervals_are_accepted_by_the_sdk` proves each one parses.
+/// The UI renders this list rather than keeping its own, so a vendor
+/// change lands in one place.
+pub const INTERVALS: &[IntervalOption] = &[
+    IntervalOption {
+        id: "tick",
+        label: "Tick by tick",
+    },
+    IntervalOption {
+        id: "10ms",
+        label: "10 ms",
+    },
+    IntervalOption {
+        id: "100ms",
+        label: "100 ms",
+    },
+    IntervalOption {
+        id: "500ms",
+        label: "500 ms",
+    },
+    IntervalOption {
+        id: "1s",
+        label: "1 second",
+    },
+    IntervalOption {
+        id: "5s",
+        label: "5 seconds",
+    },
+    IntervalOption {
+        id: "10s",
+        label: "10 seconds",
+    },
+    IntervalOption {
+        id: "15s",
+        label: "15 seconds",
+    },
+    IntervalOption {
+        id: "30s",
+        label: "30 seconds",
+    },
+    IntervalOption {
+        id: "1m",
+        label: "1 minute",
+    },
+    IntervalOption {
+        id: "5m",
+        label: "5 minutes",
+    },
+    IntervalOption {
+        id: "10m",
+        label: "10 minutes",
+    },
+    IntervalOption {
+        id: "15m",
+        label: "15 minutes",
+    },
+    IntervalOption {
+        id: "30m",
+        label: "30 minutes",
+    },
+    IntervalOption {
+        id: "1h",
+        label: "1 hour",
+    },
+];
+
+/// Strip anything that would be awkward in a filename on any platform.
+fn sanitize(raw: &str) -> String {
+    raw.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_lowercase()
+}
+
+/// Map legacy interval spellings onto the wire values ThetaData
+/// accepts. The v2 API took a millisecond integer where `0` meant
+/// "every update"; v3 names that `tick` and rejects everything outside
+/// the named set. Queue rows, saved searches and schedules written
+/// before the rename still carry the old spellings, so they are
+/// translated on the way out rather than migrated in place.
+pub fn normalize_interval(raw: &str) -> String {
+    let raw = raw.trim();
+    if let Some(named) = match raw {
+        "0" => Some("tick"),
+        "10" => Some("10ms"),
+        "100" => Some("100ms"),
+        "500" => Some("500ms"),
+        "1000" => Some("1s"),
+        "5000" => Some("5s"),
+        "10000" => Some("10s"),
+        "15000" => Some("15s"),
+        "30000" => Some("30s"),
+        "60000" | "60s" => Some("1m"),
+        "300000" | "300s" => Some("5m"),
+        "600000" | "600s" => Some("10m"),
+        "900000" | "900s" => Some("15m"),
+        "1800000" | "1800s" => Some("30m"),
+        "3600000" | "3600s" => Some("1h"),
+        _ => None,
+    } {
+        return named.to_string();
+    }
+    raw.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The picker may only offer values the endpoint will accept. If the
+    /// vendor renames an interval, this fails here rather than on a
+    /// user's download.
+    #[test]
+    fn intervals_are_accepted_by_the_sdk() {
+        for opt in INTERVALS {
+            assert!(
+                thetadatadx::Interval::try_from(opt.id).is_ok(),
+                "interval `{}` is not accepted by the SDK",
+                opt.id
+            );
+        }
+    }
+
+    /// Every legacy spelling must land on a value the SDK accepts —
+    /// otherwise a queue row written by an older build fails at run time
+    /// with an opaque parameter error.
+    #[test]
+    fn legacy_interval_spellings_normalize_to_accepted_values() {
+        for legacy in [
+            "0", "10", "100", "500", "1000", "5000", "10000", "15000", "30000", "60000", "60s",
+            "300000", "300s", "600000", "600s", "900000", "900s", "1800000", "1800s", "3600000",
+            "3600s",
+        ] {
+            let normalized = normalize_interval(legacy);
+            assert!(
+                thetadatadx::Interval::try_from(normalized.as_str()).is_ok(),
+                "legacy interval `{legacy}` normalized to `{normalized}`, which the SDK rejects",
+            );
+        }
+    }
+
+    /// Two pulls that differ only by contract filter must not write to
+    /// the same file. Before this, the second one found the first one's
+    /// file already there and reported done without fetching anything.
+    fn option_spec() -> DataSpec {
+        DataSpec {
+            kind: DataKind::parse("option_history_quote").expect("known dataset"),
+            symbol: "SPXW".into(),
+            date: NaiveDate::from_ymd_opt(2026, 9, 21).unwrap(),
+            interval: None,
+            expiration: "*".into(),
+            strike: "*".into(),
+            right: "both".into(),
+            transforms: crate::Transforms::default(),
+            extra: BTreeMap::new(),
+        }
+    }
+
+    /// `strike_range`, `max_dte`, `start_time` and the greeks inputs are
+    /// real declared parameters that the UI collects. They used to stop
+    /// at the queue: `to_endpoint_spec` filled six names and dropped
+    /// everything else, so a user who asked for 5 strikes around spot
+    /// silently downloaded the whole chain.
+    #[test]
+    fn extra_args_reach_the_endpoint_when_it_declares_them() {
+        let mut spec = option_spec();
+        spec.extra.insert("strike_range".into(), "5".into());
+        spec.extra.insert("max_dte".into(), "30".into());
+
+        let lowered = spec.to_endpoint_spec();
+        assert_eq!(
+            lowered.args.get("strike_range").map(String::as_str),
+            Some("5")
+        );
+        assert_eq!(lowered.args.get("max_dte").map(String::as_str), Some("30"));
+    }
+
+    /// An endpoint that does not declare the parameter must not receive
+    /// it — `insert_raw` would reject the unknown name and fail the
+    /// whole task. This is what lets one saved preset carry across
+    /// related endpoints.
+    #[test]
+    fn extra_args_the_endpoint_does_not_declare_are_dropped() {
+        let mut spec = option_spec();
+        spec.kind = DataKind::parse("stock_history_trade").expect("known dataset");
+        spec.extra.insert("strike_range".into(), "5".into());
+
+        let lowered = spec.to_endpoint_spec();
+        assert!(
+            !lowered.args.contains_key("strike_range"),
+            "stock_history_trade has no strike_range param"
+        );
+    }
+
+    /// Narrowing by an extra arg produces different data, so it must
+    /// produce a different file — same reasoning as the expiration and
+    /// strike qualifiers.
+    #[test]
+    fn extra_args_change_the_filename() {
+        let plain = option_spec();
+        let mut narrowed = option_spec();
+        narrowed.extra.insert("strike_range".into(), "5".into());
+
+        assert_ne!(plain.file_stem(), narrowed.file_stem());
+        assert!(
+            narrowed.file_stem().ends_with("_20260921"),
+            "date stays last"
+        );
+    }
+
+    #[test]
+    fn narrowed_pulls_get_distinct_filenames() {
+        let base = DataSpec {
+            kind: DataKind::parse("option_history_quote").expect("known dataset"),
+            symbol: "SPXW".into(),
+            date: NaiveDate::from_ymd_opt(2026, 9, 21).unwrap(),
+            interval: None,
+            expiration: "*".into(),
+            strike: "*".into(),
+            right: "both".into(),
+            transforms: crate::Transforms::default(),
+            extra: BTreeMap::new(),
+        };
+
+        // The whole-chain default keeps the historical name, so an
+        // existing library still resolves.
+        assert_eq!(base.file_qualifier(), "");
+        assert_eq!(base.file_stem(), "spxw_option_history_quote_20260921");
+
+        let mut a = base.clone();
+        a.expiration = "20261016".into();
+        let mut b = base.clone();
+        b.expiration = "20261120".into();
+        assert_ne!(a.file_stem(), b.file_stem());
+
+        let mut calls = base.clone();
+        calls.right = "call".into();
+        let mut puts = base.clone();
+        puts.right = "put".into();
+        assert_ne!(calls.file_stem(), puts.file_stem());
+
+        let mut tick = base.clone();
+        tick.interval = Some("tick".into());
+        let mut minute = base.clone();
+        minute.interval = Some("1m".into());
+        // `tick` is the unsampled default and adds nothing to the name.
+        assert_eq!(tick.file_stem(), base.file_stem());
+        assert_ne!(minute.file_stem(), base.file_stem());
+    }
+
+    /// The date has to stay the last underscore-separated segment,
+    /// because `coverage::scan` reads it off the end.
+    #[test]
+    fn the_date_stays_last_whatever_the_qualifier() {
+        let mut spec = DataSpec {
+            kind: DataKind::parse("option_history_quote").expect("known dataset"),
+            symbol: "SPXW".into(),
+            date: NaiveDate::from_ymd_opt(2026, 9, 21).unwrap(),
+            interval: Some("5m".into()),
+            expiration: "20261016".into(),
+            strike: "5400.5".into(),
+            right: "call".into(),
+            transforms: crate::Transforms::default(),
+            extra: BTreeMap::new(),
+        };
+        let stem = spec.file_stem();
+        assert!(stem.ends_with("_20260921"), "date must be last: {stem}");
+        assert!(stem.starts_with("spxw_"), "symbol must be first: {stem}");
+        // Nothing in a filename that a filesystem would object to.
+        assert!(
+            stem.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
+            "unsafe filename: {stem}"
+        );
+
+        spec.strike = "*".into();
+        assert!(!spec.file_stem().contains("k-"));
+    }
+
+    /// A value already in wire form survives normalization untouched.
+    #[test]
+    fn wire_intervals_pass_through_normalization() {
+        for opt in INTERVALS {
+            assert_eq!(normalize_interval(opt.id), opt.id);
+        }
+    }
+}
+
+/// Generic endpoint spec — covers every endpoint in the SDK registry via the
 /// registry-driven `invoke_endpoint` dispatcher. Both required (positional
 /// upstream) and optional (fluent .setter) params are normalized into one
 /// flat string-keyed bag; the dispatcher resolves type per endpoint

@@ -2,19 +2,21 @@
   /**
    * SmartFilters — friendly shortcut controls for common option params.
    *
-   * When the selected catalogue entry has params named max_dte, min_dte,
-   * strike_filter_low, strike_filter_high, expiration, strike, or right,
-   * presents guided shortcuts that write resolved values into the shared
-   * `values` record.
+   * When the selected catalogue entry declares max_dte, strike_range,
+   * expiration or right, presents guided shortcuts that write resolved
+   * values into the shared `values` record. Every name written here is
+   * a real registry parameter — anything else is dropped on the way to
+   * the request, silently.
    *
    * Shortcuts shown:
    *   - Right: Both / Calls / Puts
-   *   - DTE: quick buttons + slider
-   *   - Strike — Range: low/high dollar inputs
-   *   - Strike — ATM ±N%: helper panel that resolves spot + strikes live
+   *   - DTE: quick buttons + slider  (max_dte)
+   *   - Strikes: whole chain / ±n around spot  (strike_range)
    *   - Expiration: All / Next 4 monthlies / Specific date
    */
   import { ChevronDown, ChevronRight, Loader2, AlertCircle } from "lucide-svelte";
+  import IconCall from "$lib/icons/IconCall.svelte";
+  import IconPut from "$lib/icons/IconPut.svelte";
   import { api } from "$lib/api";
   import type { EndpointParam } from "$lib/api";
 
@@ -33,8 +35,8 @@
   const has = $derived((name: string) => paramNames.has(name));
 
   const hasRight      = $derived(has("right"));
-  const hasDte        = $derived(has("max_dte") || has("min_dte"));
-  const hasStrikeRange = $derived(has("strike_filter_low") && has("strike_filter_high"));
+  const hasDte        = $derived(has("max_dte"));
+  const hasStrikeRange = $derived(has("strike_range"));
   const hasStrike     = $derived(has("strike"));
   const hasExpiration = $derived(has("expiration"));
 
@@ -45,6 +47,11 @@
     values = { ...values, right: val };
   }
   const rightVal = $derived((values["right"] ?? "both") as "both" | "C" | "P");
+  const RIGHTS = [
+    { id: "both" as const, label: "Both" },
+    { id: "C" as const, label: "Calls" },
+    { id: "P" as const, label: "Puts" },
+  ];
 
   // ── DTE ─────────────────────────────────────────────────────
   const DTE_PRESETS = [
@@ -63,78 +70,32 @@
     values = update;
   }
 
-  // ── Strike Range ──────────────────────────────────────────────
-  let strikeLow  = $state(values["strike_filter_low"]  ?? "");
-  let strikeHigh = $state(values["strike_filter_high"] ?? "");
+  // ── Strike range (server-side, around spot) ────────────────────
+  //
+  // The endpoint declares one `strike_range: Int` parameter, documented
+  // as: "for a specified value n, returns n strikes above and n below
+  // the spot price, plus the ATM strike — a maximum of 2n+1 strikes."
+  //
+  // So the bracket is resolved server-side against the spot on each
+  // requested date. An earlier version of this panel tried to do it in
+  // the browser — fetch a quote, compute a dollar band, snap it to the
+  // strike list — writing `strike_filter_low`/`strike_filter_high`,
+  // which are not parameters any endpoint has. Nothing it produced ever
+  // reached a request.
+  const STRIKE_RANGE_PRESETS = [
+    { n: 1, label: "ATM ±1" },
+    { n: 5, label: "±5" },
+    { n: 10, label: "±10" },
+    { n: 25, label: "±25" },
+  ];
 
-  // Mirror local strike inputs into `values` only when they actually
-  // differ. Writing every fire (even no-op) re-publishes a fresh
-  // object reference, which retriggers parent reactivity, retriggers
-  // this effect → infinite loop.
-  $effect(() => {
-    const wantLow  = has("strike_filter_low")  ? strikeLow  : "";
-    const wantHigh = has("strike_filter_high") ? strikeHigh : "";
-    if (!wantLow && !wantHigh) return;
-    const currLow  = values["strike_filter_low"]  ?? "";
-    const currHigh = values["strike_filter_high"] ?? "";
-    if (wantLow === currLow && wantHigh === currHigh) return;
-    const update: Record<string, string> = { ...values };
-    if (has("strike_filter_low")  && strikeLow)  update["strike_filter_low"]  = strikeLow;
-    if (has("strike_filter_high") && strikeHigh) update["strike_filter_high"] = strikeHigh;
+  const strikeRange = $derived(values["strike_range"] ?? "");
+
+  function applyStrikeRange(n: number | null) {
+    const update = { ...values };
+    if (n === null) delete update["strike_range"];
+    else update["strike_range"] = String(n);
     values = update;
-  });
-
-  // ── ATM ±N% Helper ────────────────────────────────────────────
-  let atmOpen    = $state(false);
-  let atmPct     = $state(10);
-  let atmLoading = $state(false);
-  let atmError   = $state("");
-
-  async function resolveAtm() {
-    if (!symbol) { atmError = "Select a symbol first."; return; }
-    atmLoading = true;
-    atmError = "";
-    try {
-      // Fetch spot price via stock_snapshot_quote
-      const quoteRows = await api.listQuery({
-        endpoint: "stock_snapshot_quote",
-        args: { root: symbol },
-      });
-      if (!quoteRows || quoteRows.length === 0) throw new Error("No quote data returned.");
-      // Expect a numeric string (the ask or last price)
-      const spot = parseFloat(quoteRows[0]);
-      if (isNaN(spot) || spot <= 0) throw new Error(`Could not parse spot price: ${quoteRows[0]}`);
-
-      const factor = atmPct / 100;
-      const low  = (spot * (1 - factor)).toFixed(2);
-      const high = (spot * (1 + factor)).toFixed(2);
-
-      strikeLow  = low;
-      strikeHigh = high;
-
-      // Also fetch available strikes and snap to nearest bracket if possible
-      const expParam = values["expiration"] && values["expiration"] !== "*"
-        ? values["expiration"]
-        : "*";
-      const strikesRaw = await api.listQuery({
-        endpoint: "option_list_strikes",
-        args: { root: symbol, expiration: expParam },
-      }).catch(() => [] as string[]);
-
-      if (strikesRaw.length > 0) {
-        const strikes = strikesRaw.map(Number).filter((n) => !isNaN(n)).sort((a, b) => a - b);
-        const lo = Math.min(...strikes.filter((s) => s >= parseFloat(low)));
-        const hi = Math.max(...strikes.filter((s) => s <= parseFloat(high)));
-        if (isFinite(lo)) strikeLow  = String(lo);
-        if (isFinite(hi)) strikeHigh = String(hi);
-      }
-
-      atmOpen = false;
-    } catch (e) {
-      atmError = e instanceof Error ? e.message : String(e);
-    } finally {
-      atmLoading = false;
-    }
   }
 
   // ── Expiration ────────────────────────────────────────────────
@@ -157,7 +118,7 @@
     try {
       const rows = await api.listQuery({
         endpoint: "option_list_expirations",
-        args: { root: symbol },
+        args: { symbol },
       });
       const today = new Date();
       const monthlies = rows
@@ -224,11 +185,7 @@
         <div class="sf-row">
           <span class="sf-label">Right</span>
           <div class="tile-picker" role="radiogroup" aria-label="Option right">
-            {#each [
-              { id: "both" as const, label: "Both" },
-              { id: "C"    as const, label: "Calls" },
-              { id: "P"    as const, label: "Puts" },
-            ] as opt (opt.id)}
+            {#each RIGHTS as opt (opt.id)}
               <button
                 type="button"
                 role="radio"
@@ -236,7 +193,11 @@
                 class="tile-btn"
                 class:active={rightVal === opt.id}
                 onclick={() => setRight(opt.id)}
-              >{opt.label}</button>
+              >
+                {#if opt.id === "C"}<IconCall size={13} />{/if}
+                {#if opt.id === "P"}<IconPut size={13} />{/if}
+                {opt.label}
+              </button>
             {/each}
           </div>
         </div>
@@ -274,91 +235,35 @@
         </div>
       {/if}
 
-      <!-- ── Strike Range ── -->
-      {#if hasStrikeRange || hasStrike}
+      <!-- ── Strike range ── -->
+      {#if hasStrikeRange}
         <div class="sf-row">
-          <span class="sf-label">Strike range</span>
-          <div class="strike-range-row">
-            <input
-              type="number"
-              class="field-input strike-input"
-              bind:value={strikeLow}
-              placeholder="Low ($)"
-              aria-label="Strike range low"
-              min="0"
-              step="0.5"
-            />
-            <span class="range-sep">–</span>
-            <input
-              type="number"
-              class="field-input strike-input"
-              bind:value={strikeHigh}
-              placeholder="High ($)"
-              aria-label="Strike range high"
-              min="0"
-              step="0.5"
-            />
-          </div>
-        </div>
-      {/if}
-
-      <!-- ── ATM ±N% ── -->
-      {#if hasStrikeRange || hasStrike}
-        <div class="sf-row sf-row-indent">
-          <button
-            type="button"
-            class="atm-toggle"
-            onclick={() => { atmOpen = !atmOpen; atmError = ""; }}
-            aria-expanded={atmOpen}
-          >
-            {#if atmOpen}
-              <ChevronDown size={12} strokeWidth={1.75} />
-            {:else}
-              <ChevronRight size={12} strokeWidth={1.75} />
-            {/if}
-            ATM ±N% shortcut
-          </button>
-
-          {#if atmOpen}
-            <div class="atm-panel">
-              <label class="atm-label">
-                Bracket: ±<span class="tabnum">{atmPct}</span>%
-                <input
-                  type="range"
-                  min="5"
-                  max="50"
-                  step="1"
-                  class="dte-slider"
-                  bind:value={atmPct}
-                  aria-label="ATM bracket percentage"
-                />
-              </label>
-
-              {#if atmError}
-                <div class="atm-error">
-                  <AlertCircle size={13} strokeWidth={1.75} />
-                  <span>{atmError}</span>
-                </div>
-              {/if}
-
+          <span class="sf-label">Strikes</span>
+          <div class="dte-controls">
+            <div class="dte-presets">
               <button
                 type="button"
-                class="btn-resolve"
-                onclick={resolveAtm}
-                disabled={atmLoading || !symbol}
-              >
-                {#if atmLoading}
-                  <Loader2 size={13} strokeWidth={1.75} class="spin" />
-                  Resolving…
-                {:else}
-                  Resolve strikes
-                {/if}
-              </button>
-              {#if !symbol}
-                <p class="atm-hint">Select a symbol in step 2 first.</p>
-              {/if}
+                class="tile-btn"
+                class:active={strikeRange === ""}
+                onclick={() => applyStrikeRange(null)}
+              >Whole chain</button>
+              {#each STRIKE_RANGE_PRESETS as p (p.n)}
+                <button
+                  type="button"
+                  class="tile-btn"
+                  class:active={strikeRange === String(p.n)}
+                  onclick={() => applyStrikeRange(p.n)}
+                >{p.label}</button>
+              {/each}
             </div>
-          {/if}
+            <p class="sf-hint text-caption">
+              {#if strikeRange}
+                Up to {2 * Number(strikeRange) + 1} strikes around the spot price on each date.
+              {:else}
+                Every strike listed on each date.
+              {/if}
+            </p>
+          </div>
         </div>
       {/if}
 
@@ -458,10 +363,6 @@
     border-bottom: none;
   }
 
-  .sf-row-indent {
-    padding-left: calc(var(--sp-4) + var(--sp-8));
-    background: var(--surface-1);
-  }
 
   .sf-label {
     font-size: var(--text-body-sm);
@@ -480,6 +381,9 @@
   }
 
   .tile-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     padding: var(--sp-2) var(--sp-4);
     background: var(--surface-2);
     border: 1.5px solid var(--border);
@@ -537,6 +441,7 @@
     max-width: 280px;
   }
 
+  .sf-hint { margin: 2px 0 0; color: var(--fg-subtle); }
   .dte-val {
     font-size: var(--text-body-sm);
     color: var(--fg-muted);
@@ -545,11 +450,6 @@
   }
 
   /* Strike range */
-  .strike-range-row {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-  }
 
   .field-input {
     height: 32px;
@@ -573,54 +473,12 @@
 
   .field-input::placeholder { color: var(--fg-subtle); }
 
-  .strike-input {
-    width: 110px;
-  }
 
-  .range-sep {
-    font-size: var(--text-body-sm);
-    color: var(--fg-subtle);
-    flex-shrink: 0;
-  }
 
   /* ATM panel */
-  .atm-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--sp-1);
-    background: transparent;
-    border: none;
-    color: var(--fg-muted);
-    font-size: var(--text-body-sm);
-    font-weight: var(--weight-medium);
-    cursor: pointer;
-    padding: 0;
-    transition: color var(--dur-fast) var(--ease-standard);
-    outline: none;
-  }
 
-  .atm-toggle:hover { color: var(--fg); }
-  .atm-toggle:focus-visible { box-shadow: var(--shadow-glow-accent); border-radius: var(--r-sm); }
 
-  .atm-panel {
-    display: flex;
-    flex-direction: column;
-    gap: var(--sp-3);
-    padding: var(--sp-3) var(--sp-4);
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    margin-top: var(--sp-2);
-    max-width: 360px;
-  }
 
-  .atm-label {
-    font-size: var(--text-body-sm);
-    color: var(--fg-muted);
-    display: flex;
-    flex-direction: column;
-    gap: var(--sp-2);
-  }
 
   .atm-error {
     display: flex;
@@ -630,34 +488,8 @@
     color: var(--bad);
   }
 
-  .atm-hint {
-    font-size: var(--text-caption);
-    color: var(--fg-subtle);
-    text-transform: none;
-    letter-spacing: 0;
-    font-weight: var(--weight-normal);
-    margin: 0;
-  }
 
-  .btn-resolve {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--sp-2);
-    height: 30px;
-    padding: 0 var(--sp-4);
-    background: var(--accent);
-    color: #fff;
-    border: none;
-    border-radius: var(--r-sm);
-    font-size: var(--text-body-sm);
-    font-weight: var(--weight-semi);
-    cursor: pointer;
-    transition: filter var(--dur-fast) var(--ease-standard);
-    align-self: flex-start;
-  }
 
-  .btn-resolve:hover:not(:disabled) { filter: brightness(1.08); }
-  .btn-resolve:disabled { opacity: 0.5; cursor: not-allowed; }
 
   :global(.btn-resolve .spin) {
     animation: spin 0.7s linear infinite;

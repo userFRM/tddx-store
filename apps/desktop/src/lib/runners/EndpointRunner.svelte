@@ -5,7 +5,8 @@
    * write result to a chosen file. Powers the "Run" button on every
    * EndpointCard.
    */
-  import { X, Play, Loader2, Check, ChevronRight } from "lucide-svelte";
+  import { X, Play, Loader2, Check, ChevronRight, FolderOpen} from "lucide-svelte";
+  import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { api } from "$lib/api";
   import { app, log } from "$lib/stores/app.svelte";
 
@@ -23,6 +24,19 @@
     const stem = `${r.endpoint.name}__${Date.now()}`;
     const ext = r.format;
     return `${app.settings.output_dir}/_oneshot/${stem}.${ext}`;
+  }
+
+  // One-shot results land in `_oneshot/`, away from the library tree,
+  // so the only way to reach one is the path in the status line.
+  let writtenPath = $state("");
+  async function reveal() {
+    try {
+      await revealItemInDir(writtenPath);
+    } catch (e: unknown) {
+      if (app.endpointRunner) {
+        app.endpointRunner.msg = e instanceof Error ? e.message : String(e);
+      }
+    }
   }
 
   async function run() {
@@ -48,9 +62,11 @@
       app.endpointRunner.busy = false;
       app.endpointRunner.msg =
         rows === 0 ? "No data" : `Wrote ${rows.toLocaleString()} row${rows === 1 ? "" : "s"} → ${path}`;
+      writtenPath = rows === 0 ? "" : path;
       log("info", `Ran ${ep.name}`, { rows, path });
     } catch (e: unknown) {
       app.endpointRunner.busy = false;
+      writtenPath = "";
       const msg = e instanceof Error ? e.message : String(e);
       app.endpointRunner.msg = msg;
       log("error", `${ep.name} failed: ${msg}`);
@@ -61,10 +77,10 @@
     const lower = t.toLowerCase();
     if (lower.includes("date")) return "YYYYMMDD";
     if (lower.includes("symbol")) return "QQQ";
-    if (lower.includes("strike")) return "* or e.g. 500000";
-    if (lower.includes("right"))  return "C, P, or both";
+    if (lower.includes("strike")) return "* or e.g. 500 / 17.5 (dollars)";
+    if (lower.includes("right"))  return "call, put, or both";
     if (lower.includes("expiration")) return "YYYYMMDD or *";
-    if (lower.includes("interval")) return "0 (tick), 1s, 60s";
+    if (lower.includes("interval")) return "tick, 1s, 1m, 1h";
     if (lower.includes("int") || lower.includes("number")) return "integer";
     if (lower.includes("bool")) return "true / false";
     return "";
@@ -79,7 +95,7 @@
       <header class="head">
         <div class="title-block">
           <span class="text-caption">Run endpoint</span>
-          <h2 class="title text-mono">{r.endpoint.name}</h2>
+          <h2 class="title text-figures">{r.endpoint.name}</h2>
           <p class="sub fg-muted">{r.endpoint.description.split(".")[0]}.</p>
           <div class="meta tabnum">
             <span class="meta-pill">{r.endpoint.category}</span>
@@ -101,7 +117,7 @@
               <span class="ptype">· {p.param_type}</span>
             </span>
             <input
-              class="field-input text-mono"
+              class="field-input text-figures"
               placeholder={paramHint(p.param_type)}
               value={r.args[p.name] ?? ""}
               oninput={(e) => fieldChange(p.name, (e.target as HTMLInputElement).value)}
@@ -130,6 +146,11 @@
           {r.msg}
         </span>
         <div class="actions">
+          {#if writtenPath}
+            <button class="btn btn-ghost" onclick={reveal}>
+              <FolderOpen size={14} />Show file
+            </button>
+          {/if}
           <button class="btn btn-ghost" onclick={close}>Close</button>
           <button class="btn btn-primary" onclick={run} disabled={r.busy}>
             {#if r.busy}
@@ -147,7 +168,7 @@
 <style>
   .backdrop {
     position: fixed; inset: 0;
-    background: rgba(8,11,18,0.55);
+    background: var(--scrim);
     backdrop-filter: blur(4px);
     display: flex; align-items: center; justify-content: center;
     z-index: 90;

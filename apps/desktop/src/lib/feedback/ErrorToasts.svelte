@@ -143,7 +143,7 @@
     gap: var(--sp-2);
     align-items: flex-start;
     background: var(--surface-2);
-    border: 1px solid rgba(255, 126, 126, 0.25);
+    border: 1px solid var(--bad-tint);
     border-left: 3px solid var(--bad);
     border-radius: var(--r-md);
     padding: var(--sp-3);
@@ -188,7 +188,7 @@
   .action:hover {
     background: var(--accent-tint);
     color: var(--accent-hi);
-    border-color: rgba(124,140,255,0.3);
+    border-color: var(--accent-ring);
   }
   .action.ghost { background: transparent; }
   .close {
@@ -204,14 +204,14 @@
   /* Tier-denied variant: warm border + amber icon. The Upgrade action
      gets the accent fill so it's the obvious primary CTA. */
   .toast.tier-denied {
-    border: 1px solid rgba(244, 196, 48, 0.32);
-    border-left: 3px solid rgb(212, 158, 0);
+    border: 1px solid var(--warn-tint);
+    border-left: 3px solid var(--warn);
   }
-  .toast.tier-denied .icon { color: rgb(212, 158, 0); }
+  .toast.tier-denied .icon { color: var(--warn); }
   .action.upgrade {
-    background: var(--accent, rgb(56, 132, 255));
+    background: var(--accent);
     color: white;
-    border-color: var(--accent, rgb(56, 132, 255));
+    border-color: var(--accent);
     font-weight: 600;
   }
   .action.upgrade:hover { filter: brightness(1.08); color: white; }

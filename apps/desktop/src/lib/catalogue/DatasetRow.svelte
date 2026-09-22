@@ -97,8 +97,8 @@
     }
   }
 
-  function handlePanelKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") {
+  function handleWindowKeydown(e: KeyboardEvent) {
+    if (expanded && e.key === "Escape") {
       expanded = false;
     }
   }
@@ -117,6 +117,8 @@
     return "tier-pill tier-" + t.toLowerCase();
   }
 </script>
+
+<svelte:window onkeydown={handleWindowKeydown} />
 
 <div
   class="dataset-row"
@@ -195,7 +197,6 @@
       class="row-panel"
       aria-label="Details for {entry.summary || entry.name}"
       tabindex="-1"
-      onkeydown={handlePanelKeydown}
     >
       <!-- Description -->
       {#if entry.description}
@@ -418,10 +419,6 @@
   }
 
   .tier-unknown  { background: var(--surface-2);                      color: var(--fg-subtle);       }
-  .tier-free     { background: rgba(92, 101, 119, 0.15);              color: var(--fg-muted);        }
-  .tier-value    { background: rgba(56, 132, 255, 0.10);  color: rgb(56, 132, 255);  border-color: rgba(56, 132, 255, 0.20); }
-  .tier-standard { background: rgba(34, 175, 109, 0.12);  color: rgb(34, 175, 109); border-color: rgba(34, 175, 109, 0.22); }
-  .tier-pro      { background: rgba(244, 196, 48, 0.14);  color: rgb(212, 158, 0);  border-color: rgba(244, 196, 48, 0.30); }
 
   /* ── Param count ────────────────────────────────────────────── */
   .param-count {
@@ -517,7 +514,7 @@
 
   .param-name {
     font-family: var(--font-mono);
-    font-size: var(--text-mono);
+    font-size: var(--text-figures);
     color: var(--fg) !important;
     white-space: nowrap;
     width: 1%;
@@ -526,7 +523,7 @@
 
   .param-type {
     font-family: var(--font-mono);
-    font-size: var(--text-mono);
+    font-size: var(--text-figures);
     color: var(--fg-muted) !important;
     white-space: nowrap;
     width: 1%;
@@ -552,9 +549,9 @@
     font-weight: var(--weight-medium);
     letter-spacing: 0.04em;
     text-transform: uppercase;
-    background: rgba(124, 140, 255, 0.12);
+    background: var(--accent-tint-strong);
     color: var(--accent);
-    border: 1px solid rgba(124, 140, 255, 0.22);
+    border: 1px solid var(--accent-tint-strong);
   }
 
   .opt-badge {
@@ -608,7 +605,7 @@
 
   .mono-path {
     font-family: var(--font-mono);
-    font-size: var(--text-mono);
+    font-size: var(--text-figures);
     color: var(--fg-muted);
     background: transparent;
     padding: 0;
@@ -639,7 +636,7 @@
 
   .entry-name {
     font-family: var(--font-mono);
-    font-size: var(--text-mono);
+    font-size: var(--text-figures);
     color: var(--fg-subtle);
     white-space: nowrap;
     overflow: hidden;
@@ -676,9 +673,9 @@
 
   .use-btn.already-selected {
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
     cursor: default;
-    box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.25);
+    box-shadow: inset 0 0 0 2px var(--on-accent-veil);
   }
 
   .upgrade-action-btn {

@@ -33,7 +33,11 @@ export type Settings = {
   password?: string;
 };
 
-export type LoginArgs = { email: string; password: string };
+/** Tagged to match the Rust `LoginArgs` enum, so "an API key plus a
+ *  blank password" is not representable on either side. */
+export type LoginArgs =
+  | { method: "password"; email: string; password: string }
+  | { method: "api_key"; api_key: string };
 
 export type Counts = [string, number][];
 
@@ -47,6 +51,9 @@ export type TaskView = {
   bytes: number | null;
   error: string | null;
   attempts: number;
+  /** Where the task writes. Present so "open file location" has a path
+   *  without the UI reconstructing the naming scheme. */
+  path: string;
 };
 
 export type QueueSnapshot = {
@@ -63,6 +70,12 @@ export type Coverage = {
   bytes: number;
   first: string | null;
   last: string | null;
+  /** Every date on disk, ISO `YYYY-MM-DD`. The span alone cannot show
+   *  gaps, which is the whole point of a coverage view. */
+  dates: string[];
+  /** Extension the existing files use, so a refill writes the same
+   *  format as the rest of the set. */
+  format: string;
 };
 
 export type Transforms = {
@@ -84,6 +97,11 @@ export type EnqueueArgs = {
   right?: string | null;
   priority?: number | null;
   transforms?: Transforms | null;
+  /** Any other parameter the endpoint declares — `max_dte`,
+   *  `strike_range`, `start_time`, the greeks inputs. Keyed by registry
+   *  param name; keys the endpoint does not declare are dropped when
+   *  the task is lowered onto a request, not rejected. */
+  extra?: Record<string, string> | null;
 };
 
 export type EndpointParam = {
@@ -150,17 +168,35 @@ export const api = {
   /** Returns true iff a new pool was started; false means one is already running. */
   runQueue: () => invoke<boolean>("run_queue"),
   requeueFailed: () => invoke<number>("requeue_failed"),
-  cancelTask: (id: string) => invoke<void>("cancel_task", { id }),
+  /** Bulk queue operations. Each returns how many rows it changed;
+   *  rows that had already moved on are skipped rather than erroring. */
+  cancelTasks: (ids: string[]) => invoke<number>("cancel_tasks", { ids }),
+  requeueTasks: (ids: string[]) => invoke<number>("requeue_tasks", { ids }),
+  /** Deletes rows outright, live ones included — no cancel-first step. */
+  removeTasks: (ids: string[]) => invoke<number>("remove_tasks", { ids }),
+  bumpTasks: (ids: string[]) => invoke<number>("bump_tasks", { ids }),
+  duplicateTasks: (ids: string[]) => invoke<number>("duplicate_tasks", { ids }),
+  /** Delete every finished row, or every row in one finished status.
+   *  Runs against the whole queue, not just the loaded page. */
+  clearTasks: (status?: "done" | "failed" | "empty") =>
+    invoke<number>("clear_tasks", { status: status ?? null }),
   workerPoolActive: () => invoke<boolean>("worker_pool_active"),
   health: () => invoke<HealthSnapshot>("health"),
   duckdbCommand: (output_dir: string) =>
     invoke<{ sql: string; path: string; hint: string }>("duckdb_command", { output_dir }),
-  sdkVersion: () => invoke<{ thetadatadx: string; tdbe: string }>("sdk_version"),
   endpointsList: () => invoke<EndpointInfo[]>("endpoints_list"),
-  endpointsGet: (name: string) => invoke<EndpointInfo>("endpoints_get", { name }),
+  intervalOptions: () => invoke<IntervalOption[]>("interval_options"),
   endpointInvoke: (args: InvokeArgs) => invoke<number>("endpoint_invoke", { args }),
   listQuery: (args: ListQueryArgs) => invoke<string[]>("list_query", { args }),
   flatfileDownload: (args: FlatfileArgs) => invoke<string>("flatfile_download", { args }),
+  flatfileDatasets: () => invoke<FlatfileDataset[]>("flatfile_datasets"),
+  /** The exact trading days absent from a set's span, `YYYY-MM-DD`.
+   *  Read-only; the count matches what `requeueMissingDates` would act
+   *  on, so the UI never shows a number the server disagrees with. */
+  missingDates: (kind: string, symbol: string) =>
+    invoke<string[]>("missing_dates", { kind, symbol }),
+  requeueMissingDates: (kind: string, symbol: string) =>
+    invoke<number>("requeue_missing_dates", { kind, symbol }),
   indexPresets: () => invoke<IndexPresetView[]>("index_presets"),
   indexConstituents: (indexId: string) => invoke<string[]>("index_constituents", { indexId }),
   parquetPreview: (args: ParquetPreviewArgs) => invoke<PreviewResult>("parquet_preview", { args }),
@@ -172,7 +208,6 @@ export const api = {
   tierStatus: () => invoke<TierStatus>("tier_status"),
   tierEndpoints: () => invoke<TierVerdict[]>("tier_endpoints"),
   datasetCatalogue: () => invoke<CatalogueEntry[]>("dataset_catalogue"),
-  datasetMetadata: (name: string) => invoke<EndpointMeta>("dataset_metadata", { name }),
 };
 
 export type TierName = "Unknown" | "Free" | "Value" | "Standard" | "Pro";
@@ -184,8 +219,6 @@ export type ClassTier = {
   label: string;
   /** Tier name, already normalized by the backend (Unknown→Free post-connect). */
   tier: TierName;
-  /** Parallel-download budget from `Tier::workers()`. */
-  workers: number;
   /** True when at the highest tier — hide the upgrade affordance. */
   at_max: boolean;
 };
@@ -196,11 +229,12 @@ export type TierStatus = {
   indices: TierName;
   interest_rate: TierName;
   /** Iterable per-class view. Authoritative for rendering — never
-   *  derive class lists, worker counts, or Unknown-→-Free fallbacks
-   *  on the FE. The backend already applied them. */
+   *  derive class lists or Unknown-→-Free fallbacks on the FE. The
+   *  backend already applied them. */
   classes: ClassTier[];
-  /** Sum of `classes[*].workers`. */
-  total_workers: number;
+  /** Downloads in flight at once, for the whole account — the highest
+   *  per-class `2^tier`, never the sum. */
+  in_flight_budget: number;
   upgrade_url: string;
   connected: boolean;
 };
@@ -227,12 +261,17 @@ export function tierMeets(user: TierName, required: TierName): boolean {
   return TIER_RANK[user] >= TIER_RANK[required];
 }
 
-/** Map a kind string ("stock_trade", "option_quote", …) to its governing
- *  tier ("stock" | "options"). Mirrors `governing_tier` server-side for
- *  the simple case where the UI knows the kind but not the full
- *  EndpointInfo. */
-export function governingTierForKind(kind: string): "stock" | "options" {
-  return kind.startsWith("option_") ? "options" : "stock";
+/** Map a dataset name to the asset class whose subscription gates it.
+ *  Mirrors `governing_tier` server-side for the case where the UI knows
+ *  the name but not the full EndpointInfo. */
+export function governingTierForKind(
+  kind: string,
+): "stock" | "options" | "indices" | "interest_rate" {
+  const op = resolveKindToEndpoint(kind);
+  if (op.startsWith("option_")) return "options";
+  if (op.startsWith("index_")) return "indices";
+  if (op.startsWith("rate_")) return "interest_rate";
+  return "stock";
 }
 
 /** Authoritative client-side mirror of the per-endpoint tier table —
@@ -308,9 +347,10 @@ const TIER_TABLE: Record<string, TierName> = {
   calendar_year: "Value",
 };
 
-/** Curated `DataKind` short ids in the BrowseView are aliases for the
- *  full operationId. Map them to the authoritative endpoint. */
-const DATAKIND_TO_ENDPOINT: Record<string, string> = {
+/** Dataset names from before the queue and the catalogue shared one
+ *  vocabulary. Kept so saved searches and schedules written by those
+ *  builds still resolve; mirrors `LEGACY_ALIASES` in `tdds_core::spec`. */
+const LEGACY_ALIASES: Record<string, string> = {
   stock_trade: "stock_history_trade",
   stock_quote: "stock_history_quote",
   stock_trade_quote: "stock_history_trade_quote",
@@ -320,9 +360,18 @@ const DATAKIND_TO_ENDPOINT: Record<string, string> = {
   option_oi: "option_history_open_interest",
 };
 
+/** Resolve any dataset name — current or legacy — to its endpoint. */
+export function resolveKindToEndpoint(kind: string): string {
+  return LEGACY_ALIASES[kind] ?? kind;
+}
+
+/** Last-resort tier guess, used only before the backend's verdicts land.
+ *  The table below covers a handful of endpoints; anything missing is
+ *  reported as `Unknown`, which gates rather than waving through. Do not
+ *  call this directly — `tierForKind` consults the authoritative sources
+ *  first. */
 export function minTierForKind(kind: string): TierName {
-  const op = DATAKIND_TO_ENDPOINT[kind] ?? kind;
-  return TIER_TABLE[op] ?? "Free";
+  return TIER_TABLE[resolveKindToEndpoint(kind)] ?? "Unknown";
 }
 
 export type ParquetPreviewArgs = {
@@ -363,7 +412,6 @@ export type ScheduleCreateArgs = {
 
 export type HealthSnapshot = {
   pool_size: number;
-  pool_per_class: { stock: number; option: number; index: number; rate: number };
   workers_in_flight: number;
   pool_active: boolean;
   task_counts: Record<string, number>;
@@ -372,12 +420,34 @@ export type HealthSnapshot = {
   uptime_secs: number;
   desktop_version: string;
   thetadatadx_version: string;
-  tdbe_version: string;
+};
+
+/** The `sec_type` values the flat-file distribution serves. Index is
+ *  absent on purpose: there is no index flat file. */
+/** One sampling interval the endpoints accept: `id` is the wire value,
+ *  `label` is display copy. Sourced from `interval_options` — the UI
+ *  never writes its own interval list. */
+export type IntervalOption = {
+  id: string;
+  label: string;
+};
+
+export type FlatfileSecType = "OPTION" | "STOCK";
+/** The `req_type` values the flat-file distribution serves. Per-tick
+ *  trades, quotes and OHLC bars are market-data endpoints, not flat
+ *  files. */
+export type FlatfileReqType = "trade_quote" | "open_interest" | "eod";
+
+/** One served `(sec_type, req_type)` pair, from the backend's copy of
+ *  the SDK's `SERVED_DATASETS`. Never hardcode this list in the UI. */
+export type FlatfileDataset = {
+  sec_type: FlatfileSecType;
+  req_type: FlatfileReqType;
 };
 
 export type FlatfileArgs = {
-  sec_type: "OPTION" | "STOCK" | "INDEX";
-  req_type: "TRADE" | "QUOTE" | "TRADE_QUOTE" | "OPEN_INTEREST" | "OHLC" | "EOD";
+  sec_type: FlatfileSecType;
+  req_type: FlatfileReqType;
   date: string;
   output_path: string;
   format: "CSV" | "JSONL";

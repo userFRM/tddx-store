@@ -13,9 +13,11 @@ import {
   api,
   governingTierForKind,
   minTierForKind,
+  resolveKindToEndpoint,
   tierMeets,
   TIER_RANK,
   type CatalogueEntry,
+  type Coverage,
   type EndpointInfo,
   type QueueSnapshot,
   type Settings,
@@ -142,7 +144,7 @@ interface AppState {
   viewer: { open: boolean; path: string; title: string };
   // Live in-flight task ids (pushed by the worker event stream)
   runningTaskIds: string[];
-  // Endpoint runner (one-shot dispatcher modal for any of the 61)
+  // Endpoint runner (one-shot dispatcher modal for any registered endpoint)
   endpointRunnerOpen: boolean;
   endpointRunner: EndpointRunnerState | null;
   // Flatfiles modal
@@ -156,6 +158,14 @@ interface AppState {
   // YAML-driven endpoint catalogue (loaded on connect)
   catalogue: CatalogueEntry[];
   catalogueLoading: boolean;
+  /** A dataset + symbol another view wants Browse to open on. Browse
+   *  consumes it once and clears it. */
+  browseIntent: { kind: string; symbol: string } | null;
+  /** What is on disk. Shared rather than per-view so Home and Library
+   *  cannot disagree, and so a finished download can invalidate it in
+   *  one place. */
+  coverage: Coverage[];
+  coverageLoading: boolean;
 }
 
 export interface EndpointRunnerState {
@@ -191,7 +201,7 @@ export const app = $state<AppState>({
     start: "",
     end: "",
     format: "parquet",
-    interval: "0",
+    interval: "tick",
     expiration: "*",
     strike: "*",
     right: "both",
@@ -216,7 +226,7 @@ export const app = $state<AppState>({
     optionRoots: [],
   },
   themePref: "system",
-  themeResolved: "dark",
+  themeResolved: "light",
   savedSearches: [],
   cmdkOpen2: false,
   viewer: { open: false, path: "", title: "" },
@@ -230,6 +240,9 @@ export const app = $state<AppState>({
   tierVerdicts: [],
   catalogue: [],
   catalogueLoading: false,
+  browseIntent: null,
+  coverage: [],
+  coverageLoading: false,
 });
 
 // ── Theme ─────────────────────────────────────────────────────
@@ -239,14 +252,18 @@ export const app = $state<AppState>({
 // `app.path().app_data_dir()` server-side, so the theme survives a
 // reinstall under the same bundle identifier on every platform.
 import { kvGet, kvRemove, kvSet } from "$lib/persistence/kv";
+import { notify } from "$lib/persistence/notifications";
 
 const THEME_KEY = "tdds.theme";
 
 function systemPreferred(): ThemeResolved {
-  if (typeof window === "undefined" || !window.matchMedia) return "dark";
-  return window.matchMedia("(prefers-color-scheme: light)").matches
-    ? "light"
-    : "dark";
+  // Light is the fallback: the ThetaData identity is a light one, and
+  // an environment that cannot report a preference should land on the
+  // brand surface rather than the app's own dark variant.
+  if (typeof window === "undefined" || !window.matchMedia) return "light";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
 }
 
 function applyTheme(pref: ThemePref) {
@@ -285,7 +302,7 @@ export async function initTheme() {
 
   // Listen for OS preference changes when user is in "system" mode.
   if (window.matchMedia) {
-    const mq = window.matchMedia("(prefers-color-scheme: light)");
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const onChange = () => {
       if (app.themePref === "system") applyTheme("system");
     };
@@ -535,35 +552,213 @@ export function navigate(v: View) {
   app.currentView = v;
   if (v !== "detail") app.detailDataset = null;
 }
+/** Open Browse already pointed at `kind` (and optionally a symbol).
+ *
+ *  Browse owns its step state locally, so a caller cannot reach in and
+ *  set it; it hands over an intent instead and Browse applies it. The
+ *  Library's "Download more dates" used to call a helper that took a
+ *  `kind` and ignored it, dropping the user on whatever Browse had
+ *  selected last. */
+export function browseTo(kind: string, symbol = "") {
+  app.browseIntent = { kind, symbol };
+  navigate("browse");
+}
+
+/** Present one live catalogue entry in the shape the composer and the
+ *  dataset cards take.
+ *
+ *  `DATASETS` below is a seven-entry mirror written before the
+ *  catalogue was registry-driven; it still backs the home page's
+ *  curated picks, but anything that needs to address *any* dataset has
+ *  to go through the catalogue or it silently covers a ninth of the
+ *  product. */
+export function datasetFromCatalogue(entry: CatalogueEntry): DatasetMeta {
+  const assetClass: AssetClass = entry.name.startsWith("option_")
+    ? "option"
+    : entry.name.startsWith("index_")
+      ? "index"
+      : entry.name.startsWith("rate_") || entry.name.startsWith("interest_")
+        ? "rate"
+        : "stock";
+  return {
+    id: entry.name,
+    title: entry.summary || entry.name,
+    subtitle: entry.description || "",
+    assetClass,
+    cadence: (entry.subcategory || "history") as Cadence,
+    specLine: entry.rest_path,
+    featured: false,
+    tags: [entry.category, entry.subcategory].filter(Boolean),
+  };
+}
+
+/** The catalogue entry for `name`, as a `DatasetMeta`. */
+export function datasetById(name: string): DatasetMeta | null {
+  const entry = app.catalogue.find((e) => e.name === name);
+  return entry ? datasetFromCatalogue(entry) : null;
+}
+
 export function openDetail(d: DatasetMeta) {
   app.detailDataset = d;
   app.currentView = "detail";
 }
 
 // ── Queue polling ────────────────────────────────────────────
-let _pollTimer: ReturnType<typeof setInterval> | null = null;
+//
+// Adaptive, because a fixed 1.5s poll of a 500-row snapshot plus a
+// disk walk is real work to do forever in an app that is idle almost
+// all of the time. Three rates:
+//
+//   ACTIVE  something is running or pending — the user is watching
+//           progress bars, so stay responsive
+//   IDLE    queue is drained; poll only to notice work arriving from
+//           a schedule tick or a second window
+//   HIDDEN  window is not on screen; nobody can see the result
+//
+// Self-scheduling `setTimeout` rather than `setInterval` so the rate
+// can change between ticks, and so a slow snapshot cannot stack up
+// overlapping calls the way a fixed interval can.
+const POLL_ACTIVE_MS = 1500;
+const POLL_IDLE_MS = 8000;
+const POLL_HIDDEN_MS = 30000;
+
+let _pollTimer: ReturnType<typeof setTimeout> | null = null;
+let _pollRunning = false;
 
 export function startQueuePoll() {
-  if (_pollTimer !== null) return;
+  if (_pollRunning) return;
+  _pollRunning = true;
   app.queuePollActive = true;
-  _pollOnce();
-  _pollTimer = setInterval(_pollOnce, 1500);
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", _onVisibility);
+  }
+  void _pollLoop();
 }
 
 export function stopQueuePoll() {
+  _pollRunning = false;
   if (_pollTimer !== null) {
-    clearInterval(_pollTimer);
+    clearTimeout(_pollTimer);
     _pollTimer = null;
+  }
+  if (typeof document !== "undefined") {
+    document.removeEventListener("visibilitychange", _onVisibility);
   }
   app.queuePollActive = false;
 }
 
+/** Coming back to the window should show current state immediately,
+ *  not up to `POLL_HIDDEN_MS` later. */
+function _onVisibility() {
+  if (!_pollRunning || document.visibilityState !== "visible") return;
+  if (_pollTimer !== null) clearTimeout(_pollTimer);
+  void _pollLoop();
+}
+
+async function _pollLoop() {
+  if (!_pollRunning) return;
+  await _pollOnce();
+  if (!_pollRunning) return;
+  _pollTimer = setTimeout(() => void _pollLoop(), _pollDelay());
+}
+
+function _pollDelay(): number {
+  if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+    return POLL_HIDDEN_MS;
+  }
+  return _queueBusy() ? POLL_ACTIVE_MS : POLL_IDLE_MS;
+}
+
+function _queueBusy(): boolean {
+  return _busy(app.queueSnap);
+}
+
+function _busy(snap: QueueSnapshot | null): boolean {
+  return (snap?.counts ?? []).some(
+    ([status, n]) => n > 0 && (status === "running" || status === "pending"),
+  );
+}
+
+/** Counts at the moment the queue last went from idle to busy, so the
+ *  completion notice can report the run rather than the lifetime
+ *  totals of the database. */
+let _runBaseline: Record<string, number> | null = null;
+
 async function _pollOnce() {
   try {
-    app.queueSnap = await api.snapshot();
+    const snap = await api.snapshot();
+    const finishedBefore = _finishedCount(app.queueSnap);
+    const wasBusy = _busy(app.queueSnap);
+    app.queueSnap = snap;
+    // A task that just finished changed what is on disk. Coverage was
+    // fetched once per view on mount, so until this the Library and the
+    // Home dashboard kept showing pre-download numbers until the user
+    // navigated away and back.
+    if (_finishedCount(snap) > finishedBefore) void loadCoverage(true);
+
+    const isBusy = _busy(snap);
+    if (isBusy && !wasBusy) {
+      _runBaseline = _countMap(snap);
+    } else if (!isBusy && wasBusy) {
+      _announceRun(snap);
+      _runBaseline = null;
+    }
   } catch {
     // pre-connect; silently drop
   }
+}
+
+function _countMap(snap: QueueSnapshot): Record<string, number> {
+  return Object.fromEntries(snap.counts);
+}
+
+/** Tell the user a run is over. A download queue is something you start
+ *  and walk away from, so the one moment worth interrupting for is the
+ *  moment it stops. */
+function _announceRun(snap: QueueSnapshot) {
+  const end = _countMap(snap);
+  const start = _runBaseline ?? {};
+  const delta = (k: string) => Math.max(0, (end[k] ?? 0) - (start[k] ?? 0));
+  const done = delta("done");
+  const failed = delta("failed");
+  const empty = delta("empty");
+  if (done + failed + empty === 0) return;
+
+  const parts = [`${done} downloaded`];
+  if (empty > 0) parts.push(`${empty} with no data`);
+  if (failed > 0) parts.push(`${failed} failed`);
+  const body = parts.join(", ");
+  log(failed > 0 ? "warn" : "info", `Queue finished — ${body}`);
+  void notify("Downloads finished", body);
+}
+
+function _finishedCount(snap: QueueSnapshot | null): number {
+  if (!snap) return 0;
+  return snap.counts
+    .filter(([status]) => status === "done" || status === "empty" || status === "failed")
+    .reduce((sum, [, n]) => sum + n, 0);
+}
+
+/** Refresh what is on disk. `force` re-fetches even when a copy is
+ *  already held; without it the call is a no-op once loaded, which is
+ *  what view mounts want. */
+export async function loadCoverage(force = false) {
+  if (app.coverageLoading) return;
+  if (!force && app.coverage.length > 0) return;
+  app.coverageLoading = true;
+  try {
+    app.coverage = await api.coverage();
+  } catch {
+    // not connected yet
+  } finally {
+    app.coverageLoading = false;
+  }
+}
+
+/** Pull a fresh snapshot now. Row actions call this so the list reflects
+ *  the change on the click rather than up to a poll interval later. */
+export async function refreshQueueSnapshot() {
+  await _pollOnce();
 }
 
 // ── Connection ───────────────────────────────────────────────
@@ -632,23 +827,36 @@ export async function loadCatalogue() {
   }
 }
 
-/** Verdict for a specific `DataKind` ("stock_trade", "option_quote", …).
- *  Falls back to a static client-side mirror when the verdict list
- *  hasn't loaded yet (the first ~150ms after a fresh connect). */
+/** Verdict for a dataset by name, legacy spellings included.
+ *
+ *  Three sources, in order of authority: the backend's per-endpoint
+ *  verdicts, the catalogue's `min_tier` (parsed from ThetaData's own
+ *  `x-min-subscription`), and — only in the ~150ms before either has
+ *  loaded — the static mirror in `api.ts`. Consulting the live verdict
+ *  first matters: the mirror covers a handful of endpoints, so ranking
+ *  it first reported almost every dataset as ungated and let the user
+ *  queue downloads their subscription would refuse. */
 export function tierForKind(kind: string): {
   required: TierName;
   user: TierName;
   allowed: boolean;
 } {
-  const required = minTierForKind(kind);
+  const endpoint = resolveKindToEndpoint(kind);
   const status = app.tierStatus;
   const userTier: TierName = status
-    ? (governingTierForKind(kind) === "options" ? status.options : status.stock)
+    ? status[governingTierForKind(endpoint)]
     : "Unknown";
+
+  const live = tierForEndpoint(endpoint);
+  if (live) {
+    return { required: live.required, user: live.user, allowed: live.allowed };
+  }
+  const fromCatalogue = app.catalogue.find((e) => e.name === endpoint)?.min_tier;
+  const required = fromCatalogue ?? minTierForKind(endpoint);
   return { required, user: userTier, allowed: tierMeets(userTier, required) };
 }
 
-/** Verdict for a registered endpoint by name (any of the 61). */
+/** Verdict for a registered endpoint by name. */
 export function tierForEndpoint(name: string): TierVerdict | null {
   return app.tierVerdicts.find((v) => v.endpoint === name) ?? null;
 }
@@ -666,8 +874,48 @@ export function hasAnyGatedDatasets(): boolean {
 }
 
 // ── Composer helpers ─────────────────────────────────────────
+// ── Per-dataset output format ────────────────────────────────────
+//
+// The Detail view offers a default format per dataset. It is stored
+// here and applied whenever that dataset is queued, so the setting is
+// the promise it makes rather than a control bound to nothing.
+
+/** The formats the writer supports. Anything else is not renderable. */
+export type OutputFormat = "parquet" | "csv" | "jsonl" | "json";
+const OUTPUT_FORMATS: OutputFormat[] = ["parquet", "csv", "jsonl", "json"];
+
+const DATASET_FORMAT_KEY = "tdds.datasetFormats";
+let datasetFormats = $state<Record<string, OutputFormat>>({});
+
+/** Load the remembered formats. Called once on launch. */
+export async function loadDatasetFormats() {
+  const stored = (await kvGet<Record<string, string>>(DATASET_FORMAT_KEY)) ?? {};
+  // A hand-edited or downgraded store could hold anything; keep only
+  // what the writer can actually produce.
+  datasetFormats = Object.fromEntries(
+    Object.entries(stored).filter(([, v]) => isOutputFormat(v)),
+  ) as Record<string, OutputFormat>;
+}
+
+function isOutputFormat(value: string): value is OutputFormat {
+  return (OUTPUT_FORMATS as string[]).includes(value);
+}
+
+export function datasetFormatFor(datasetId: string): OutputFormat {
+  return datasetFormats[datasetId] ?? "parquet";
+}
+
+export function rememberDatasetFormat(datasetId: string, format: string) {
+  if (!isOutputFormat(format)) return;
+  datasetFormats = { ...datasetFormats, [datasetId]: format };
+  void kvSet(DATASET_FORMAT_KEY, datasetFormats);
+}
+
 export function openComposer(dataset: DatasetMeta | null) {
   app.composer.anchorDataset = dataset;
+  // Open on the format this dataset was last saved with, so the quick
+  // add and the composer agree with the Detail view's setting.
+  if (dataset) app.composer.format = datasetFormatFor(dataset.id);
   app.composer.open = true;
   app.composer.status = "idle";
   app.composer.msg = "";
@@ -691,6 +939,41 @@ export function openIndexPreset(p: IndexPresetView) {
 }
 export function closeIndexPreset() {
   app.presetOpen = false;
+}
+
+/** Open the one-shot dispatcher on `name`, pre-filling whatever
+ *  arguments the caller already knows.
+ *
+ *  List endpoints (`option_list_expirations`, `stock_list_dates`, …)
+ *  answer a question rather than produce a per-day dataset: they take
+ *  no date range, so there is nothing for the queue to fan out over
+ *  and `enqueue` rejects them outright. They belong here instead. */
+export function openEndpointRunner(
+  name: string,
+  args: Record<string, string> = {},
+  format: "parquet" | "csv" | "jsonl" | "json" = "csv",
+) {
+  const endpoint = app.catalogue.find((e) => e.name === name);
+  if (!endpoint) {
+    log("error", `Unknown endpoint ${name}`);
+    return;
+  }
+  app.endpointRunner = {
+    endpoint: {
+      name: endpoint.name,
+      description: endpoint.description,
+      category: endpoint.category,
+      subcategory: endpoint.subcategory,
+      rest_path: endpoint.rest_path,
+      returns: endpoint.returns,
+      params: endpoint.params,
+    },
+    args,
+    format,
+    busy: false,
+    msg: "",
+  };
+  app.endpointRunnerOpen = true;
 }
 
 // ── Settings ─────────────────────────────────────────────────

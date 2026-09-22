@@ -1,20 +1,14 @@
-//! Worker pool: pulls tasks from the queue, hits thetadatadx, writes the
-//! requested format.
+//! Worker pool: pulls tasks from the queue, runs them through the
+//! endpoint dispatcher, writes the requested format.
 //!
-//! Concurrency is sliced per **asset class**, not per process. ThetaData's
-//! FPSS server applies an independent in-flight cap of `2^tier` to each
-//! Nexus pool (stock, option, index, rate). A user holding Pro Options +
-//! Standard Stocks can run 8 option workers and 4 stock workers
-//! simultaneously without the server queueing or 429ing either lane.
+//! One pool, sized by `UserTiers::in_flight_budget` — ThetaData's
+//! limiter is account-wide, so there is one budget to spend and no
+//! per-class lanes to split it into. Workers claim from the whole queue
+//! in insertion order.
 //!
-//! We mirror that on the client by spawning one logical sub-pool per
-//! asset class, sized from `UserTiers`. Each sub-pool calls
-//! `Queue::claim_next_by_class(class)`, which restricts the atomic claim
-//! to that class's `kind` set — so a stock worker can never accidentally
-//! pick up an option task and double-book the option budget.
-//!
-//! The `workers` count is no longer a user setting; exposing it as one
-//! was a footgun (over-provisioning → 429s, under → idle bandwidth).
+//! The count is not a user setting; exposing it as one was a footgun
+//! (over-provisioning buys server-side pacing, not throughput; under
+//! leaves bandwidth idle).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -22,11 +16,10 @@ use tokio::sync::{mpsc, Mutex};
 
 use crate::client::Client;
 use crate::coverage::dataset_path;
-use crate::format::{write_batch, TicksArrowExt};
+use crate::format::write_batch;
 use crate::progress::{Progress, ProgressEvent};
 use crate::queue::{Queue, Task};
-use crate::spec::DataKind;
-use crate::tier::{AssetClass, UserTiers};
+use crate::tier::UserTiers;
 
 pub struct Pool {
     client: Client,
@@ -60,26 +53,15 @@ impl Pool {
         self.progress.clone()
     }
 
-    /// Drain the queue. Spawns per-class worker tasks; each pulls only
-    /// from its class's kind set. Returns when every class is drained.
+    /// Drain the queue. Returns once every worker has seen it empty.
     pub async fn run(&self) -> crate::Result<()> {
-        // Stock + Option are the only classes with shipping kinds.
-        // Index/Rate are reserved for future endpoints — `claim_next_by_class`
-        // short-circuits them so we don't burn a SQL hit per spin.
-        let classes = [AssetClass::Stock, AssetClass::Option];
         let mut handles = Vec::new();
-        for class in classes {
-            let n = self.tiers.workers_for(class);
-            if n == 0 {
-                continue;
-            }
-            for _ in 0..n {
-                let client = self.client.clone();
-                let queue = self.queue.clone();
-                let progress = self.progress.clone();
-                let tx = self.events_tx.clone();
-                handles.push(tokio::spawn(run_worker(class, client, queue, progress, tx)));
-            }
+        for _ in 0..self.tiers.in_flight_budget() {
+            let client = self.client.clone();
+            let queue = self.queue.clone();
+            let progress = self.progress.clone();
+            let tx = self.events_tx.clone();
+            handles.push(tokio::spawn(run_worker(client, queue, progress, tx)));
         }
         for h in handles {
             let _ = h.await;
@@ -89,14 +71,13 @@ impl Pool {
 }
 
 async fn run_worker(
-    class: AssetClass,
     client: Client,
     queue: Queue,
     progress: Arc<Mutex<Progress>>,
     tx: Option<mpsc::Sender<ProgressEvent>>,
 ) {
     loop {
-        let task = match queue.claim_next_by_class(class).await {
+        let task = match queue.claim_next().await {
             Ok(Some(t)) => t,
             Ok(None) => break,
             Err(e) => {
@@ -151,63 +132,61 @@ async fn run_worker(
             let mut p = progress.lock().await;
             p.running = p.running.saturating_sub(1);
             match &res {
-                Ok((rows, bytes)) => {
-                    if *rows > 0 {
-                        p.completed += 1;
-                        p.rows_written += *rows as u64;
-                        p.bytes_written += *bytes;
-                    }
+                Ok(Outcome::Written { rows, bytes }) => {
+                    p.completed += 1;
+                    p.rows_written += *rows as u64;
+                    p.bytes_written += *bytes;
                 }
+                Ok(Outcome::AlreadyOnDisk { .. }) => p.completed += 1,
+                Ok(Outcome::NoData) => {}
                 Err(_) => p.failed += 1,
             }
         }
-        // mark_*() returns Ok(true) when it actually
-        // updated a row, Ok(false) when the row was no
-        // longer `running` (cancelled by the user via
-        // queue::cancel) so the worker should NOT clobber
-        // the cancelled state. SQL errors propagate via
-        // `tracing::error!` because retry logic is
-        // outside the per-row scope.
+        // mark_*() returns Ok(true) when it actually updated a row,
+        // Ok(false) when the row was no longer `running` (cancelled by
+        // the user via queue::cancel), so the worker must not clobber
+        // the cancelled state. SQL errors are logged here because retry
+        // lives outside the per-row scope.
         match res {
-            Ok((0, _ms)) => match queue.mark_empty(&task.id).await {
-                Ok(true) => {
-                    if let Some(tx) = &tx {
-                        let _ = tx
-                            .send(ProgressEvent::Empty {
-                                task_id: task.id.clone(),
-                                millis: 0,
-                            })
-                            .await;
+            Ok(outcome) => match outcome.recorded() {
+                None => match queue.mark_empty(&task.id).await {
+                    Ok(true) => {
+                        if let Some(tx) = &tx {
+                            let _ = tx
+                                .send(ProgressEvent::Empty {
+                                    task_id: task.id.clone(),
+                                    millis: 0,
+                                })
+                                .await;
+                        }
                     }
-                }
-                Ok(false) => {
-                    tracing::info!(
+                    Ok(false) => tracing::info!(
                         task_id = %task.id,
                         "task cancelled mid-flight; skipping mark_empty"
-                    );
-                }
-                Err(e) => tracing::error!(?e, task_id = %task.id, "mark_empty"),
-            },
-            Ok((rows, bytes)) => match queue.mark_done(&task.id, rows as i64, bytes as i64).await {
-                Ok(true) => {
-                    if let Some(tx) = &tx {
-                        let _ = tx
-                            .send(ProgressEvent::Done {
-                                task_id: task.id.clone(),
-                                rows: rows as u64,
-                                bytes,
-                                millis: 0,
-                            })
-                            .await;
+                    ),
+                    Err(e) => tracing::error!(?e, task_id = %task.id, "mark_empty"),
+                },
+                Some((rows, bytes)) => {
+                    match queue.mark_done(&task.id, rows as i64, bytes as i64).await {
+                        Ok(true) => {
+                            if let Some(tx) = &tx {
+                                let _ = tx
+                                    .send(ProgressEvent::Done {
+                                        task_id: task.id.clone(),
+                                        rows: rows as u64,
+                                        bytes,
+                                        millis: 0,
+                                    })
+                                    .await;
+                            }
+                        }
+                        Ok(false) => tracing::info!(
+                            task_id = %task.id,
+                            "task cancelled mid-flight; skipping mark_done"
+                        ),
+                        Err(e) => tracing::error!(?e, task_id = %task.id, "mark_done"),
                     }
                 }
-                Ok(false) => {
-                    tracing::info!(
-                        task_id = %task.id,
-                        "task cancelled mid-flight; skipping mark_done"
-                    );
-                }
-                Err(e) => tracing::error!(?e, task_id = %task.id, "mark_done"),
             },
             Err(e) => {
                 let msg = e.to_string();
@@ -223,12 +202,10 @@ async fn run_worker(
                                 .await;
                         }
                     }
-                    Ok(false) => {
-                        tracing::info!(
-                            task_id = %task.id,
-                            "task already terminal; not marking failed"
-                        );
-                    }
+                    Ok(false) => tracing::info!(
+                        task_id = %task.id,
+                        "task already terminal; not marking failed"
+                    ),
                     Err(e) => tracing::error!(?e, task_id = %task.id, "mark_failed"),
                 }
             }
@@ -276,135 +253,51 @@ fn spawn_heartbeat(queue: Queue, task_id: String) -> HeartbeatGuard {
     }
 }
 
-async fn run_one(client: &Client, task: &Task) -> crate::Result<(usize, u64)> {
+/// What a single task did. Kept explicit because "wrote nothing"
+/// and "the file was already there" are different facts, and collapsing
+/// them into `rows == 0` reported every re-run of an existing file as
+/// though the server had returned no data.
+enum Outcome {
+    /// Rows came back and were written.
+    Written { rows: usize, bytes: u64 },
+    /// The file was already on disk, so nothing was fetched.
+    AlreadyOnDisk { bytes: u64 },
+    /// The server returned no rows for this request.
+    NoData,
+}
+
+impl Outcome {
+    /// The `(rows, bytes)` to record against the task, or `None` when
+    /// the request genuinely came back with nothing and the row should
+    /// be marked empty rather than done.
+    fn recorded(&self) -> Option<(usize, u64)> {
+        match *self {
+            Outcome::Written { rows, bytes } => Some((rows, bytes)),
+            Outcome::AlreadyOnDisk { bytes } => Some((0, bytes)),
+            Outcome::NoData => None,
+        }
+    }
+}
+
+async fn run_one(client: &Client, task: &Task) -> crate::Result<Outcome> {
     let out_dir = Path::new(&task.output_dir);
-    let path = dataset_path(
-        out_dir,
-        task.spec.kind,
-        &task.spec.symbol,
-        &task.spec.ymd(),
-        task.format.extension(),
-    );
+    let path = dataset_path(out_dir, &task.spec, task.format.extension());
     if path.exists() {
         let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        return Ok((0, bytes));
+        return Ok(Outcome::AlreadyOnDisk { bytes });
     }
 
-    let raw = client.raw();
-    let symbol = &task.spec.symbol;
-    let ds = task.spec.ymd();
-    let interval = task.spec.interval.as_deref().unwrap_or("0");
-    let exp = &task.spec.expiration;
-    let strike = &task.spec.strike;
-    let right = &task.spec.right;
-    let fmt = task.format;
-
-    // Each tick type implements `TicksArrowExt` on its slice. We resolve
-    // the trait at the call site (where T is concrete) and hand the
-    // resulting RecordBatch to the format-agnostic writer.
-    let rows = match task.spec.kind {
-        DataKind::StockTrade => {
-            let v = raw.stock_history_trade(symbol, &ds).await?;
-            if v.is_empty() {
-                0
-            } else {
-                let b = v.as_slice().to_arrow()?;
-                let b2 = task.spec.transforms.apply(&b)?;
-                write_batch(&b2, &path, fmt)?;
-                v.len()
-            }
-        }
-        DataKind::StockQuote => {
-            let v = raw
-                .stock_history_quote(symbol, &ds)
-                .interval(interval)
-                .await?;
-            if v.is_empty() {
-                0
-            } else {
-                let b = v.as_slice().to_arrow()?;
-                let b2 = task.spec.transforms.apply(&b)?;
-                write_batch(&b2, &path, fmt)?;
-                v.len()
-            }
-        }
-        DataKind::StockTradeQuote => {
-            let v = raw.stock_history_trade_quote(symbol, &ds).await?;
-            if v.is_empty() {
-                0
-            } else {
-                let b = v.as_slice().to_arrow()?;
-                let b2 = task.spec.transforms.apply(&b)?;
-                write_batch(&b2, &path, fmt)?;
-                v.len()
-            }
-        }
-        DataKind::OptionTrade => {
-            let v = raw
-                .option_history_trade(symbol, exp, &ds)
-                .strike(strike)
-                .right(right)
-                .await?;
-            if v.is_empty() {
-                0
-            } else {
-                let b = v.as_slice().to_arrow()?;
-                let b2 = task.spec.transforms.apply(&b)?;
-                write_batch(&b2, &path, fmt)?;
-                v.len()
-            }
-        }
-        DataKind::OptionQuote => {
-            let v = raw
-                .option_history_quote(symbol, exp, &ds)
-                .strike(strike)
-                .right(right)
-                .interval(interval)
-                .await?;
-            if v.is_empty() {
-                0
-            } else {
-                let b = v.as_slice().to_arrow()?;
-                let b2 = task.spec.transforms.apply(&b)?;
-                write_batch(&b2, &path, fmt)?;
-                v.len()
-            }
-        }
-        DataKind::OptionTradeQuote => {
-            let v = raw
-                .option_history_trade_quote(symbol, exp, &ds)
-                .strike(strike)
-                .right(right)
-                .await?;
-            if v.is_empty() {
-                0
-            } else {
-                let b = v.as_slice().to_arrow()?;
-                let b2 = task.spec.transforms.apply(&b)?;
-                write_batch(&b2, &path, fmt)?;
-                v.len()
-            }
-        }
-        DataKind::OptionOpenInterest => {
-            let v = raw
-                .option_history_open_interest(symbol, exp, &ds)
-                .strike(strike)
-                .right(right)
-                .await?;
-            if v.is_empty() {
-                0
-            } else {
-                let b = v.as_slice().to_arrow()?;
-                let b2 = task.spec.transforms.apply(&b)?;
-                write_batch(&b2, &path, fmt)?;
-                v.len()
-            }
-        }
+    // One dispatch path for every kind: `DataSpec` lowers onto the same
+    // registry spec the endpoint browser uses, so argument validation,
+    // wire coercion, and Arrow column projection are identical whichever
+    // surface queued the task.
+    let batch = crate::registry::dispatch_to_arrow(client, &task.spec.to_endpoint_spec()).await?;
+    let Some(batch) = batch.filter(|b| b.num_rows() > 0) else {
+        return Ok(Outcome::NoData);
     };
-    let bytes = if rows > 0 {
-        std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
-    } else {
-        0
-    };
-    Ok((rows, bytes))
+    let rows = batch.num_rows();
+    let transformed = task.spec.transforms.apply(&batch)?;
+    write_batch(&transformed, &path, task.format)?;
+    let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    Ok(Outcome::Written { rows, bytes })
 }

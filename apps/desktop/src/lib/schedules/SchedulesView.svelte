@@ -16,14 +16,32 @@
     Loader2,
   } from "lucide-svelte";
   import { api, TAURI_AVAILABLE, type ScheduleRow } from "$lib/api";
-  import { log } from "$lib/stores/app.svelte";
+  import { app, log } from "$lib/stores/app.svelte";
 
   let rows = $state<ScheduleRow[]>([]);
   let loading = $state(false);
   let creating = $state(false);
+  /** The dropdown offered seven hardcoded legacy names, so 53 of the
+   *  catalogue's datasets could not be scheduled at all. Driven off the
+   *  catalogue, grouped by asset class. */
+  const datasetGroups = $derived.by(() => {
+    const order: string[] = [];
+    const map = new Map<string, typeof app.catalogue>();
+    for (const entry of app.catalogue) {
+      if (entry.subcategory === "list") continue; // nothing to download
+      const cat = entry.category.charAt(0).toUpperCase() + entry.category.slice(1);
+      if (!map.has(cat)) {
+        map.set(cat, []);
+        order.push(cat);
+      }
+      map.get(cat)!.push(entry);
+    }
+    return order.map((category) => ({ category, entries: map.get(category)! }));
+  });
+
   let composer = $state({
     name: "",
-    kind: "stock_trade_quote",
+    kind: "stock_history_trade_quote",
     symbol: "",
     format: "parquet",
     cron_kind: "weekdays",
@@ -101,9 +119,19 @@
     <span class="text-caption">Library · Scheduler</span>
     <h1 class="title">Recurring downloads</h1>
     <p class="sub fg-muted">
-      Cron-style schedules persisted in your queue database. Use them to
-      sync flat files daily / weekly without keeping the app open all
-      session.
+      A schedule queues one dataset for one symbol on the days you pick,
+      covering the previous session. The app checks every minute while it
+      is open; times are your machine's, so leave headroom after the
+      close rather than scheduling on the boundary.
+    </p>
+    <p class="sub fg-subtle">
+      Whole-market flat-file archives are not schedulable yet — those
+      download outside the queue. Track it in
+      <a
+        href="https://github.com/userFRM/tddx-store/issues/3"
+        target="_blank"
+        rel="noreferrer">issue #3</a
+      >.
     </p>
   </header>
 
@@ -115,18 +143,18 @@
       </label>
       <label class="field">
         <span class="text-caption">Symbol</span>
-        <input class="field-input text-mono" bind:value={composer.symbol} placeholder="QQQ" />
+        <input class="field-input text-figures" bind:value={composer.symbol} placeholder="QQQ" />
       </label>
       <label class="field">
-        <span class="text-caption">Kind</span>
+        <span class="text-caption">Dataset</span>
         <select class="field-input" bind:value={composer.kind}>
-          <option value="stock_trade">stock_trade</option>
-          <option value="stock_quote">stock_quote</option>
-          <option value="stock_trade_quote">stock_trade_quote</option>
-          <option value="option_trade">option_trade</option>
-          <option value="option_quote">option_quote</option>
-          <option value="option_trade_quote">option_trade_quote</option>
-          <option value="option_oi">option_oi</option>
+          {#each datasetGroups as group (group.category)}
+            <optgroup label={group.category}>
+              {#each group.entries as entry (entry.name)}
+                <option value={entry.name}>{entry.summary || entry.name}</option>
+              {/each}
+            </optgroup>
+          {/each}
         </select>
       </label>
     </div>
@@ -150,7 +178,7 @@
         </select>
       </label>
       <label class="field">
-        <span class="text-caption">Fire at (HH:MM ET)</span>
+        <span class="text-caption">Fire at (HH:MM, your timezone)</span>
         <input class="field-input tabnum" bind:value={composer.at_time} placeholder="17:30" />
       </label>
       <button class="btn btn-primary" onclick={create} disabled={creating}>

@@ -86,7 +86,7 @@
 </script>
 
 {#if app.consoleOpen}
-  <aside class="console" role="complementary" aria-label="Activity console">
+  <aside class="console" aria-label="Activity console">
     <header class="console-header">
       <div class="console-title-block">
         <span class="text-caption">Console</span>
@@ -140,7 +140,7 @@
                   <Info size={12} />
                 {/if}
               </span>
-              <span class="log-time text-mono">{fmtTime(entry.ts)}</span>
+              <span class="log-time text-figures">{fmtTime(entry.ts)}</span>
               <span class="log-msg">{entry.msg}</span>
               {#if entry.level === "error"}
                 <span class="log-actions">
@@ -162,7 +162,7 @@
                 </span>
               {/if}
               {#if entry.context}
-                <span class="log-ctx text-mono">
+                <span class="log-ctx text-figures">
                   {Object.entries(entry.context)
                     .map(([k, v]) => `${k}=${v}`)
                     .join(" ")}
@@ -254,7 +254,7 @@
   .filter-pill.active {
     background: var(--accent-tint);
     color: var(--accent-hi);
-    border-color: rgba(124, 140, 255, 0.4);
+    border-color: var(--accent-ring);
   }
   .filter-count {
     font-family: var(--font-mono);
@@ -318,7 +318,7 @@
   .row-btn:hover {
     background: var(--accent-tint);
     color: var(--accent-hi);
-    border-color: rgba(124,140,255,0.3);
+    border-color: var(--accent-ring);
   }
 
   .empty {

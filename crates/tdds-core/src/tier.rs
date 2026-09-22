@@ -1,12 +1,11 @@
 //! Subscription-tier gating.
 //!
 //! ThetaData partitions historical access into four tiers per asset class
-//! (Free / Value / Standard / Pro). The Nexus auth response carries the
-//! customer's tier per asset class; `thetadatadx` exposes it as
-//! `SubscriptionInfo { stock, options }`. We map endpoint category +
-//! subcategory to a conservative minimum tier and expose a
-//! ranked-comparison gate plus a stable upgrade URL the UI links to when
-//! the user is below the bar.
+//! (Free / Value / Standard / Pro). The market-data client exposes the
+//! customer's tier per class as a typed enum, captured at authentication.
+//! We map endpoint category + subcategory to a conservative minimum tier
+//! and expose a ranked-comparison gate plus a stable upgrade URL the UI
+//! links to when the user is below the bar.
 //!
 //! The gating is advisory — the gRPC server is the source of truth and
 //! returns `PermissionDenied` for under-entitled calls. The UI uses this
@@ -68,14 +67,26 @@ impl Tier {
         }
     }
 
-    /// Parse the wire/label string emitted by `thetadatadx` (case-insensitive).
-    pub fn from_label(s: &str) -> Tier {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "free" | "0" => Tier::Free,
-            "value" | "1" => Tier::Value,
-            "standard" | "2" => Tier::Standard,
-            "pro" | "professional" | "3" => Tier::Pro,
-            _ => Tier::Unknown,
+    /// Map the SDK's typed subscription tier. `None` means the auth
+    /// response carried no tier for that asset class.
+    pub fn from_sdk(tier: Option<thetadatadx::SubscriptionTier>) -> Tier {
+        match tier {
+            Some(thetadatadx::SubscriptionTier::Free) => Tier::Free,
+            Some(thetadatadx::SubscriptionTier::Value) => Tier::Value,
+            Some(thetadatadx::SubscriptionTier::Standard) => Tier::Standard,
+            Some(thetadatadx::SubscriptionTier::Pro) => Tier::Pro,
+            None => Tier::Unknown,
+        }
+    }
+
+    /// The SDK's own view of this tier, where one exists.
+    fn as_sdk(self) -> Option<thetadatadx::SubscriptionTier> {
+        match self {
+            Tier::Unknown => None,
+            Tier::Free => Some(thetadatadx::SubscriptionTier::Free),
+            Tier::Value => Some(thetadatadx::SubscriptionTier::Value),
+            Tier::Standard => Some(thetadatadx::SubscriptionTier::Standard),
+            Tier::Pro => Some(thetadatadx::SubscriptionTier::Pro),
         }
     }
 
@@ -84,30 +95,29 @@ impl Tier {
         self.rank() >= required.rank()
     }
 
-    /// Max in-flight requests the ThetaData FPSS server will accept for
-    /// this tier. The terminal documents the cap as `2^subscription_tier`
-    /// per asset class: Free=1, Value=2, Standard=4, Pro=8. We mirror
-    /// that 1:1 — going over makes the server queue requests internally
-    /// or drop them with a 429, both of which look like flaky downloads
-    /// on the client. `Unknown` falls back to 1 so a missing tier
-    /// (pre-connect, or a class the upstream SDK hasn't surfaced yet)
-    /// gracefully degrades to serial rather than spinning up phantom
-    /// workers that all queue behind one another.
-    pub const fn workers(self) -> usize {
-        match self {
-            Tier::Unknown | Tier::Free => 1,
-            Tier::Value => 2,
-            Tier::Standard => 4,
-            Tier::Pro => 8,
-        }
+    /// Client-side estimate of how many historical requests ThetaData
+    /// processes at once: `2^tier` — Free=1, Value=2, Standard=4,
+    /// Pro=8. `Unknown` degrades to 1.
+    ///
+    /// Two things this is **not**. It is not a per-asset-class budget:
+    /// the server's limiter is account-wide, so a Pro-options,
+    /// Standard-stocks account does not get 8 + 4 lanes, it gets one
+    /// account-wide budget (see [`UserTiers::in_flight_budget`]). And
+    /// it is not a hard client cap: requests past the budget are
+    /// accepted, queued and paced server-side, and only overflow past
+    /// the server queue returns 429. Firing more than this buys
+    /// pacing, not parallelism, so the pool sizes to it and stops.
+    pub fn workers(self) -> usize {
+        // The figure is the SDK's, not a second copy of it here.
+        self.as_sdk()
+            .map_or(1, thetadatadx::SubscriptionTier::max_concurrent_requests)
     }
 }
 
-/// Which Nexus asset-class pool a tick belongs to. Each class has its own
-/// server-side concurrency budget and its own per-class subscription
-/// tier, so the client must mirror that split: a Pro Options subscriber
-/// with a Standard Stocks subscription gets 8 option workers + 4 stock
-/// workers running simultaneously, not min/max/sum of the two.
+/// Which asset class an endpoint or tick belongs to. ThetaData sells a
+/// separate subscription per class, so the class decides which tier
+/// gates a dataset. It does **not** decide concurrency — that budget is
+/// account-wide ([`UserTiers::in_flight_budget`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AssetClass {
@@ -128,12 +138,9 @@ impl AssetClass {
     }
 }
 
-/// User's tier per asset class. ThetaData's Nexus auth response carries
-/// four independent subscription bytes (`stock_subscription`,
-/// `options_subscription`, `indices_subscription`,
-/// `interest_rate_subscription`). `thetadatadx` v10 only exposes the
-/// first two on `SubscriptionInfo`; the latter two are filled with
-/// `Tier::Unknown` until the upstream SDK surfaces accessor methods.
+/// User's tier per asset class, as the auth response reported it —
+/// `stock`, `options`, `indices`, `interest_rate`. A class the response
+/// omitted arrives as `Tier::Unknown`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct UserTiers {
     pub stock: Tier,
@@ -154,8 +161,7 @@ impl Default for UserTiers {
 }
 
 impl UserTiers {
-    /// Tier the user holds for `class`. Drives per-class worker
-    /// concurrency (see `Tier::workers`).
+    /// Tier the user holds for `class`. Drives dataset gating.
     pub fn for_class(&self, class: AssetClass) -> Tier {
         match class {
             AssetClass::Stock => self.stock,
@@ -165,9 +171,18 @@ impl UserTiers {
         }
     }
 
-    /// In-flight request budget granted by `class`'s tier.
-    pub fn workers_for(&self, class: AssetClass) -> usize {
-        self.for_class(class).workers()
+    /// The one in-flight request budget for the whole account.
+    ///
+    /// ThetaData's limiter is account-wide, not per class, so the
+    /// budget is the highest per-class `2^tier` the account holds —
+    /// never the sum. A Pro-options, Standard-stocks account downloads
+    /// 8 at a time in total, not 12.
+    pub fn in_flight_budget(&self) -> usize {
+        [self.stock, self.options, self.indices, self.interest_rate]
+            .into_iter()
+            .map(Tier::workers)
+            .max()
+            .unwrap_or(1)
     }
 }
 
@@ -582,15 +597,21 @@ mod tests {
     }
 
     #[test]
-    fn from_label_handles_all_variants() {
-        assert_eq!(Tier::from_label("Free"), Tier::Free);
-        assert_eq!(Tier::from_label("VALUE"), Tier::Value);
-        assert_eq!(Tier::from_label("standard"), Tier::Standard);
-        assert_eq!(Tier::from_label("Pro"), Tier::Pro);
-        assert_eq!(Tier::from_label("Professional"), Tier::Pro);
-        assert_eq!(Tier::from_label("3"), Tier::Pro);
-        assert_eq!(Tier::from_label("garbage"), Tier::Unknown);
-        assert_eq!(Tier::from_label(""), Tier::Unknown);
+    fn sdk_tiers_round_trip() {
+        use thetadatadx::SubscriptionTier as Sdk;
+        for (sdk, ours) in [
+            (Sdk::Free, Tier::Free),
+            (Sdk::Value, Tier::Value),
+            (Sdk::Standard, Tier::Standard),
+            (Sdk::Pro, Tier::Pro),
+        ] {
+            assert_eq!(Tier::from_sdk(Some(sdk)), ours);
+            assert_eq!(ours.as_sdk(), Some(sdk));
+            // The concurrency figure must stay the SDK's, not drift here.
+            assert_eq!(ours.workers(), sdk.max_concurrent_requests());
+        }
+        assert_eq!(Tier::from_sdk(None), Tier::Unknown);
+        assert_eq!(Tier::Unknown.workers(), 1);
     }
 
     #[test]

@@ -14,14 +14,28 @@ authors = ["userFRM"]
 repository = "https://github.com/userFRM/tddx-store"
 
 [workspace.dependencies]
-# Pinned to v10.0.0 — first stable major release of thetadatadx (streaming
-# SSOT, fluent contract-first API, FLATFILES SDK parity). tdbe 0.13.1
-# rides the same tag on the monorepo.
-thetadatadx = { git = "https://github.com/userFRM/ThetaDataDx", tag = "v10.0.0", features = ["arrow"] }
-tdbe = { git = "https://github.com/userFRM/ThetaDataDx", tag = "v10.0.0" }
+# Published crate on crates.io. The package is `thetadatadx-rs`; its lib
+# target is `thetadatadx`, which is the name every `use` site spells. The
+# former `tdbe` crate is a module inside it now.
+#
+# `arrow` gives the zero-copy `RecordBatch` boundary the writers need.
+# Keep arrow-* and parquet below on the same major as the SDK's, or the
+# graph carries two incompatible `RecordBatch` types.
+#
+# `__internal` is what reaches the endpoint registry (`ENDPOINTS`,
+# `find`, `EndpointArgs`, `invoke_endpoint`). The SDK marks that feature
+# unstable and tells external crates not to enable it, and every symbol
+# behind it can change without a major bump. It is enabled deliberately:
+# the registry is what makes a data-driven catalogue possible at all —
+# without it this app would hand-write a call site per endpoint and
+# re-declare their parameters. The right long-term fix is a stable
+# public registry surface in the SDK; until then, pin an exact SDK
+# version and re-check this on every bump.
+thetadatadx = { package = "thetadatadx-rs", version = "=0.4.0", features = ["arrow", "__internal"] }
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+chrono-tz = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
@@ -32,11 +46,11 @@ clap = { version = "4", features = ["derive", "env"] }
 
 # Storage / formats
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "chrono"] }
-arrow-array = "58"
-arrow-schema = "58"
-arrow-csv = "58"
-arrow-json = "58"
-parquet = { version = "58", features = ["arrow", "zstd"] }
+arrow-array = "59"
+arrow-schema = "59"
+arrow-csv = "59"
+arrow-json = "59"
+parquet = { version = "59", features = ["arrow", "zstd"] }
 
 # Misc
 rustls = { version = "0.23", features = ["ring"] }

@@ -1,45 +1,46 @@
 ---
 name: TdDx Store
 description: |
-  TdDx Store is a desktop dataset marketplace for ThetaData market data.
+  TdDx Store is a desktop dataset downloader for ThetaData market data.
   Users browse, preview, and download structured tick / quote / OHLC /
   greeks datasets across stocks, options, indices, and rates.
 identity:
-  archetype: "Premium financial data terminal × consumer dataset store"
+  archetype: "ThetaData product surface, at working density"
+  source_of_truth: "ThetaData UI foundations v1 (board F01, Precision Catalog)"
   references:
+    - ThetaData website atlas (brand palette, type, spacing, actions)
     - Bloomberg Terminal (information density, monospaced precision)
-    - Hugging Face Datasets (browse → preview → download flow)
-    - Linear (motion, restraint, surface hierarchy)
-    - Apple App Store (featured shelves, detail pages, cart)
+    - Hugging Face Datasets (browse to preview to download flow)
 colors:
-  bg: "#0B0E14"          # Near-black, slightly cool. Surface 0.
-  surface-1: "#11151D"   # Cards, sidebars.
-  surface-2: "#161B25"   # Hover, raised cards.
-  surface-3: "#1E2430"   # Modals, popovers.
-  border: "#222936"      # Hairlines.
-  border-strong: "#2A3242"
-  fg: "#E6EAF2"          # Primary text.
-  fg-muted: "#9AA3B2"    # Secondary text, captions.
-  fg-subtle: "#5C6577"   # Disabled, placeholders.
-  accent: "#7C8CFF"      # Periwinkle indigo. Sole driver of interaction.
-  accent-hi: "#9AA8FF"   # Hover.
-  accent-lo: "#5868D9"   # Pressed.
-  accent-tint: "#7C8CFF1F"  # 12% accent for backgrounds.
-  good: "#5DD4A0"
-  warn: "#F5C56F"
-  bad: "#FF7E7E"
-  data-bull: "#34D399"   # Green for up moves / positive deltas.
-  data-bear: "#F87171"   # Red for down moves.
+  brand-blue: "#1074FF"   # Identity. Logo, active indicators, focus rings.
+  accent: "#0063CC"       # Action blue. Links and filled buttons.
+  accent-hi: "#0052A8"    # Hover. Darkens, per the brand sheet.
+  accent-lo: "#004387"    # Pressed.
+  accent-tint: "rgba(16, 116, 255, 0.10)"
+  bg: "#FAFAFA"           # Canvas.
+  surface-1: "#FFFFFF"    # Cards, sidebars.
+  surface-2: "#F4F5F7"    # Hover, raised cards.
+  surface-3: "#EDEFF3"    # Modals, popovers.
+  border: "#E0E0E0"       # Divider.
+  border-strong: "#C9CDD4"
+  fg: "#323348"           # Text.
+  fg-muted: "#525252"     # Brand gray.
+  fg-subtle: "#8A8D9B"
+  good: "#1F7A4D"
+  warn: "#8A5B00"
+  bad: "#C0392B"
+  data-bull: "#0F8A55"
+  data-bear: "#C0392B"
 typography:
   display-xl:
-    fontFamily: "Inter Display, Inter, system-ui"
-    fontSize: "2.5rem"
+    fontFamily: "Inter, system-ui"
+    fontSize: "2rem"
     fontWeight: 600
     letterSpacing: "-0.02em"
     lineHeight: 1.1
   display-lg:
-    fontFamily: "Inter Display, Inter, system-ui"
-    fontSize: "1.75rem"
+    fontFamily: "Inter, system-ui"
+    fontSize: "1.5rem"
     fontWeight: 600
     letterSpacing: "-0.015em"
     lineHeight: 1.15
@@ -68,17 +69,17 @@ typography:
     lineHeight: 1.4
     color: "fg-muted"
   mono:
-    fontFamily: "JetBrains Mono, SF Mono, Consolas, ui-monospace, monospace"
+    fontFamily: "IBM Plex Mono, SF Mono, Consolas, ui-monospace, monospace"
     fontSize: "0.8125rem"
     fontVariantNumeric: "tabular-nums"
     fontWeight: 400
     lineHeight: 1.4
 rounded:
   none: "0px"
-  sm: "6px"
-  md: "10px"
-  lg: "14px"
-  xl: "20px"
+  sm: "6px"     # Inputs, per the brand sheet.
+  md: "8px"     # Cards, per the brand sheet.
+  lg: "12px"
+  xl: "16px"
   pill: "999px"
 spacing:
   px: "1px"
@@ -93,16 +94,17 @@ spacing:
   10: "40px"
   12: "48px"
   16: "64px"
+  24: "96px"
 shadows:
-  flat: "0 0 0 1px rgba(0,0,0,0.2)"
-  raised: "0 1px 2px rgba(0,0,0,0.4), 0 0 0 1px rgba(0,0,0,0.25)"
-  modal: "0 24px 64px rgba(0,0,0,0.55), 0 0 0 1px rgba(0,0,0,0.4)"
-  glow-accent: "0 0 0 4px rgba(124,140,255,0.18)"
+  flat: "0 0 0 1px rgba(50,51,72,0.06)"
+  raised: "0 1px 2px rgba(50,51,72,0.08), 0 0 0 1px rgba(50,51,72,0.05)"
+  modal: "0 24px 64px rgba(50,51,72,0.18), 0 0 0 1px rgba(50,51,72,0.08)"
+  glow-accent: "0 0 0 3px rgba(16,116,255,0.25)"
 motion:
   duration:
     instant: "60ms"
     fast: "120ms"
-    base: "180ms"
+    base: "150ms"
     slow: "260ms"
   easing:
     standard: "cubic-bezier(0.2, 0.0, 0, 1.0)"
@@ -119,56 +121,115 @@ icon:
     sm: "14px"
     md: "16px"
     lg: "20px"
-  stroke: 1.75
+  stroke: 1.5
 ---
 
 ## Identity
 
-TdDx Store is a *dataset marketplace for traders and quants* — a place to
-shop for high-fidelity market data the way someone shops the App Store
-for an app. The aesthetic must reconcile two opposing instincts:
+TdDx Store downloads ThetaData market data, so it looks like ThetaData.
+The palette, type, spacing, radii and action styling above are lifted
+from the ThetaData UI foundations sheet (board F01 of the website
+atlas), not invented here. Someone who has used the website should
+recognise this as the same product family on first glance.
+
+What the app adds is *density*. The brand sheet is sized for a marketing
+page — 16px body, 48px controls, 64-96px section spacing. A downloader
+is a working surface where a row of numbers has to stay readable
+hundreds of rows deep, so the scale tightens: 14px body, 32px inputs,
+13px tabular mono. The ratios, weights and colours are the brand's; the
+sizes are the tool's.
+
+Two instincts have to coexist:
 
 1. **Trading-floor seriousness.** Tabular numbers in monospaced
    tabular-nums, dense information without visual stutter, predictable
    surfaces. A working tool, not a landing page.
-2. **Consumer browsing pleasure.** Featured shelves, dataset cards with
-   spec previews, smooth detail pages, a queue ("cart") that builds with
-   tactile feedback.
-
-The result reads as a premium financial terminal that has been re-skinned
-by a contemporary product team. Serious where it must be (the data),
-delightful where it should be (the browsing).
+2. **Browsing pleasure.** Featured shelves, dataset cards with spec
+   previews, smooth detail pages, a queue that builds with tactile
+   feedback.
 
 ## Color
 
-Single accent (periwinkle indigo `#7C8CFF`) is the only interactive color.
-All other ink is grayscale. This is non-negotiable: the eye should know
-that anything indigo is clickable, and that nothing else is. Status
-colors (`good`, `warn`, `bad`) appear only inside pills and badges,
-never as primary CTAs.
+Light is the default, because the brand is light. A dark theme ships
+too — this app is a desktop tool people leave open next to a chart —
+but it is the app's own variant, not a second identity: it keeps the
+same blue rather than substituting a different hue.
+
+Two blues, with different jobs, exactly as the brand sheet splits them:
+
+- **Brand blue `#1074FF`** — identity. The logo, the active indicator,
+  the focus ring. Fixed across both themes.
+- **Action blue `#0063CC`** — interaction. Links and filled buttons.
+  Hover and pressed *darken* on light; on a light canvas a lighter
+  hover reads as disabled.
+
+Everything else is greyscale. The eye should know that anything blue is
+clickable and that nothing else is. Status colors (`good`, `warn`,
+`bad`) appear only inside pills and badges, never as primary CTAs.
 
 For market-data deltas inside dataset previews, use `data-bull` /
 `data-bear` (green / red) — these are *data ink*, distinct from UI
 status. Never use them on chrome.
 
-Surfaces nest by 0.5–0.7 units of luminance: `bg` < `surface-1` <
+Surfaces nest by one step of luminance: `bg` < `surface-1` <
 `surface-2` < `surface-3`. A modal feels lifted because each surface is
-one step brighter than the one beneath. Avoid drop shadows for elevation
-on inline surfaces — the luminance step is the elevation.
+one step from the one beneath; on light that step goes down in
+lightness, on dark it goes up. Avoid drop shadows for elevation on
+inline surfaces — the luminance step is the elevation.
+
+**No colour literal belongs in a component.** Every wash, ring and pill
+colour has a token (`--accent-tint`, `--good-ring`, `--tier-pro-bg`, …)
+precisely because the first version of this app hard-coded rgba() into
+29 files and could only ever be dark.
 
 ## Typography
 
-Inter for everything UI. Inter Display for any text ≥ 1.5rem (large
-headings). Tabular-nums on every number — counts, prices, sizes, rows,
-bytes, dates. A row of `1,234,567` aligns digit-for-digit with the row
-above and below, and that alignment is one of the things separating a
-data tool from a generic dashboard.
+Inter for everything UI, at the weights the brand sheet specifies (600
+for display and headings, 500 for labels, 400 for body).
+Tabular-nums on every number — counts, prices, sizes, rows, bytes,
+dates. A row of `1,234,567` aligns digit-for-digit with the row above
+and below, and that alignment is one of the things separating a data
+tool from a generic dashboard.
 
 `caption` (uppercase, tracked, muted) is for column headers, section
 labels, and metadata pairs. Never for body copy.
 
-JetBrains Mono for: tickers, contract specs (`SPXW 20260516 P 5400`),
-file paths, hashes, timestamps, code-like values.
+For code-shaped values — tickers, contract specs
+(`SPXW 20260516 P 5400`), file paths, hashes — use `--font-mono`, which
+resolves to the platform's own modern mono: SF Mono on macOS, Cascadia
+on Windows. The brand sheet names IBM Plex Mono, but that is a slab
+face built for print and reads as a typewriter on screen; `ui-monospace`
+also avoids shipping a webfont for a desktop app.
+
+**A number in a column is not code.** Counts, byte sizes, dates and
+percentages use `.tabnum` and `.text-figures`, both of which are the UI
+face with tabular figures. Digits align perfectly, which is the actual
+requirement, and the table stops reading as terminal output. Reach for
+the mono only when the value would be wrong to re-wrap or re-space — a
+path, a hash, a contract spec.
+
+That distinction matters more than it sounds, because the generic
+`monospace` keyword resolves to **Courier** on macOS. A stats line that
+falls through to it looks like a 1984 dot-matrix report. The mono stack
+therefore names real faces first — SF Mono, Cascadia, Menlo — and keeps
+`monospace` only as the last resort it is.
+
+**Inter is not installed on a stock macOS or Windows machine.** The
+stack falls through to `system-ui`, which is SF Pro or Segoe UI, so the
+app has been rendering in the system face rather than the brand one.
+That is a perfectly good fallback and nothing looks broken, but the
+brand sheet specifies Inter and the app does not currently honour it.
+Bundling the variable font would fix it; until then this file should
+not claim otherwise.
+
+## The wordmark
+
+`src/lib/brand/ThetaDataLogo.svelte` carries the shield paths from the
+brand asset unaltered, with the "data" half of the wordmark set to
+`currentColor` so one component serves both themes. The wordmark is
+still a live `<text>` node rather than outlines; the brand sheet says
+use the original SVG and never redraw it, so the outlined master should
+replace this before the app is shown outside the team.
 
 ## Layout
 
@@ -262,7 +323,7 @@ inline composer to override before queueing.
 
 ## Queue (the user's "cart")
 
-The queue is presented like a shopping basket / Linear inbox:
+The queue reads like an inbox of work:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -358,7 +419,9 @@ focus; Escape closes overlays. Cmd/Ctrl-K opens global search.
 - Not a dashboard. No glanceable hero numbers in the top corner.
 - Not a webapp landing page. No marketing hero, no testimonials, no
   feature grid.
-- Not Tailwind defaults. The palette is hand-tuned, not `slate-900`.
+- Not Tailwind defaults. The palette is ThetaData's, not `slate-900`.
+- Not a second brand. Nothing here invents a colour, a face or a radius
+  the UI foundations sheet does not already specify.
 
-The mental model is: Bloomberg Terminal, redesigned by Linear, with the
-content layer of a modern dataset marketplace.
+The mental model is: the ThetaData website, compressed to working
+density and given a queue.

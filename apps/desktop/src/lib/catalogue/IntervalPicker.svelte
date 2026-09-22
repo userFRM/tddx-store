@@ -5,40 +5,49 @@
    * (OHLC, quote ticks). Hidden for pure trade ticks and EOD.
    */
 
+  import { onMount } from "svelte";
+  import { api, resolveKindToEndpoint, type IntervalOption } from "$lib/api";
+  import { app, log } from "$lib/stores/app.svelte";
+
   let {
     kindId,
-    interval = $bindable("0"),
+    interval = $bindable("tick"),
   }: {
     kindId: string;
     interval: string;
   } = $props();
 
-  type IntervalOption = { id: string; label: string; description: string };
-  const OPTIONS: IntervalOption[] = [
-    { id: "0",   label: "Tick by tick", description: "Every event as it happened" },
-    { id: "1s",  label: "1 second",     description: "1-second bars / samples" },
-    { id: "60s", label: "1 minute",     description: "1-minute bars / samples" },
-    { id: "300s",label: "5 minutes",    description: "5-minute bars / samples" },
-    { id: "3600s",label: "1 hour",      description: "Hourly bars / samples" },
-  ];
+  // The option list is the backend's, not ours: ThetaData accepts a
+  // fixed set of interval spellings and rejects everything else, so a
+  // list written here would eventually offer a value that fails at
+  // download time.
+  let options = $state<IntervalOption[]>([]);
 
-  // Whether granularity applies to this kind at all
+  onMount(async () => {
+    try {
+      options = await api.intervalOptions();
+    } catch (e) {
+      log("error", `Interval list unavailable: ${e}`);
+    }
+  });
+
+  // Granularity applies exactly when the endpoint declares an
+  // `interval` parameter. Reading that off the catalogue beats guessing
+  // from the name: the old name-pattern test hid the picker for every
+  // dataset whose id merely contained "eod" or "oi", and showed it for
+  // endpoints that take no interval at all.
   const isApplicable = $derived.by(() => {
     if (!kindId) return false;
-    // Pure trade ticks — always tick, no interval selector
-    if (kindId === "stock_trade" || kindId === "option_trade") return false;
-    // EOD / OI / snapshot datasets — no interval concept
-    if (kindId.includes("eod") || kindId.includes("oi") ||
-        kindId === "index_ohlc" || kindId === "rate_levels" || kindId === "rate_dv01") return false;
-    // Index levels always tick — no aggregation option yet
-    if (kindId === "index_levels") return false;
-    return true;
+    const endpoint = resolveKindToEndpoint(kindId);
+    const entry = app.catalogue.find((e) => e.name === endpoint);
+    if (!entry) return false;
+    return entry.params.some((p) => p.name === "interval");
   });
 </script>
 
 {#if isApplicable}
   <div class="interval-picker" role="radiogroup" aria-label="Data granularity">
-    {#each OPTIONS as opt}
+    {#each options as opt (opt.id)}
       <button
         type="button"
         role="radio"
@@ -48,7 +57,7 @@
         onclick={() => (interval = opt.id)}
       >
         <span class="int-label">{opt.label}</span>
-        <span class="int-desc">{opt.description}</span>
+        <span class="int-id">{opt.id}</span>
       </button>
     {/each}
   </div>
@@ -62,17 +71,15 @@
   }
 
   .interval-btn {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 2px;
-    padding: var(--sp-2) var(--sp-3);
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--sp-2);
+    padding: 6px var(--sp-3);
     background: var(--surface-1);
     border: 1.5px solid var(--border);
     border-radius: var(--r-md);
     cursor: pointer;
     text-align: left;
-    min-width: 120px;
     transition:
       background var(--dur-fast) var(--ease-standard),
       border-color var(--dur-fast) var(--ease-standard),
@@ -105,7 +112,8 @@
     color: var(--accent-hi);
   }
 
-  .int-desc {
+  .int-id {
+    font-family: var(--font-mono);
     font-size: var(--text-caption);
     color: var(--fg-subtle);
     text-transform: none;

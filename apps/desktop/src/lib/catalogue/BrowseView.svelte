@@ -13,8 +13,10 @@
    * Sticky footer summarises selection and exposes Queue button.
    */
 
-  import { Loader2, Check, ArrowUpRight, Bookmark, Plus } from "lucide-svelte";
+  import { Loader2, Check, ArrowUpRight, Bookmark, Plus, Play } from "lucide-svelte";
   import AssetClassPicker from "$lib/catalogue/AssetClassPicker.svelte";
+  import FlatfilesShelf from "$lib/runners/FlatfilesShelf.svelte";
+  import IndexPresetsShelf from "$lib/runners/IndexPresetsShelf.svelte";
   import UniverseSelector from "$lib/catalogue/UniverseSelector.svelte";
   import KindGrid from "$lib/catalogue/KindGrid.svelte";
   import RangePicker from "$lib/catalogue/RangePicker.svelte";
@@ -22,7 +24,7 @@
   import SmartFilters from "$lib/catalogue/SmartFilters.svelte";
   import ParamForm from "$lib/catalogue/ParamForm.svelte";
   import { api, type EnqueueArgs } from "$lib/api";
-  import { app, tierForKind, log, type AssetClass } from "$lib/stores/app.svelte";
+  import { app, tierForKind, log, type AssetClass, refreshQueueSnapshot, openEndpointRunner} from "$lib/stores/app.svelte";
   import { saveSearch } from "$lib/persistence/savedSearches";
   import { openUrl } from "@tauri-apps/plugin-opener";
 
@@ -32,11 +34,32 @@
   let kindId     = $state("");
   let start      = $state("");
   let end        = $state("");
-  let interval   = $state("0");
+  let interval   = $state("tick");
   let format     = $state<"parquet" | "csv" | "jsonl" | "json">("parquet");
 
   // Shared param values map — written to by SmartFilters and ParamForm
   let paramValues = $state<Record<string, string>>({});
+
+  /** Apply a hand-over from another view (Library's "Download more
+   *  dates", a dataset detail page) exactly once, then clear it so
+   *  navigating back to Browse later does not re-apply a stale
+   *  selection. */
+  $effect(() => {
+    const intent = app.browseIntent;
+    if (!intent) return;
+    app.browseIntent = null;
+    assetClass = assetClassOf(intent.kind);
+    kindId = intent.kind;
+    if (intent.symbol) symbols = [intent.symbol];
+    paramValues = {};
+  });
+
+  function assetClassOf(kind: string): AssetClass {
+    if (kind.startsWith("option_")) return "option";
+    if (kind.startsWith("index_")) return "index";
+    if (kind.startsWith("rate_") || kind.startsWith("interest_")) return "rate";
+    return "stock";
+  }
 
   // ── Queue state ───────────────────────────────────────────────
   type QueueStatus = "idle" | "queuing" | "done" | "error";
@@ -101,6 +124,24 @@
     !hasRange && selectedParams.some((p) => p.name === "date")
   );
   const showRange = $derived(hasRange || hasPointDate);
+  /** Some endpoints answer a question ("which expirations exist for
+   *  SPX?") instead of producing a per-day dataset — the nine `list`
+   *  endpoints and the calendar lookups. They declare no date axis at
+   *  all, so the queue has nothing to fan out over and `enqueue`
+   *  rejects them with "pass date or start+end". Browse used to let the
+   *  user reach a fully-enabled Queue button for these and then fail
+   *  every time; they run one-shot instead.
+   *
+   *  Keyed on the absence of a date parameter rather than on a
+   *  subcategory name, so an endpoint that grows one stops being
+   *  run-once without an edit here. */
+  const isRunOnce = $derived(!!kindId && !showRange);
+  /** `stock_list_symbols` and `option_list_symbols` take no arguments
+   *  at all — requiring a symbol for them would block the only thing
+   *  they do. */
+  const needsSymbol = $derived(
+    selectedParams.some((p) => p.name === "symbol" || p.name === "root"),
+  );
   const showInterval = $derived(
     selectedParams.some((p) =>
       p.name === "start_time" || p.name === "end_time" || p.name === "interval"
@@ -148,8 +189,28 @@
   });
 
   const readyToQueue = $derived(
-    symbols.length > 0 && !!kindId && !gated && (!showRange || (!!start && !!end))
+    symbols.length > 0 && !!kindId && !gated && !isRunOnce && (!showRange || (!!start && !!end))
   );
+  /** The run-once equivalent: one symbol is all a list endpoint needs,
+   *  and the argument-free ones need not even that. */
+  const readyToRun = $derived(
+    !!kindId && !gated && isRunOnce && (!needsSymbol || symbols.length > 0),
+  );
+
+  function runOnce() {
+    const args: Record<string, string> = { ...extraArgs() };
+    for (const p of selectedParams) {
+      if (p.name === "symbol" || p.name === "root") {
+        if (symbols[0]) args[p.name] = symbols[0];
+      }
+      else if (p.name === "expiration" && paramValues["expiration"]) {
+        args[p.name] = paramValues["expiration"];
+      } else if (paramValues[p.name]) {
+        args[p.name] = String(paramValues[p.name]);
+      }
+    }
+    openEndpointRunner(kindId, args, format);
+  }
 
   /** Estimated number of queue tasks the current selection will fan
    *  out into. Range endpoints (`start_date`+`end_date`) ship one
@@ -212,6 +273,28 @@
     };
   }
 
+  // Params that map onto a dedicated `EnqueueArgs` field. Everything
+  // else the user filled in — `max_dte`, `strike_range`, `start_time`,
+  // `venue`, the greeks inputs — travels in `extra` and is applied to
+  // whichever of them the endpoint declares. Before this, the form
+  // collected those values and the queue dropped them on the floor.
+  const SPEC_FIELD_PARAMS = new Set([
+    "symbol", "root", "date", "start_date", "end_date",
+    "interval", "expiration", "strike", "right", "request_type",
+  ]);
+
+  function extraArgs(): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const p of selectedParams) {
+      if (SPEC_FIELD_PARAMS.has(p.name)) continue;
+      const v = paramValues[p.name];
+      if (v !== undefined && v !== null && String(v).trim() !== "") {
+        out[p.name] = String(v);
+      }
+    }
+    return out;
+  }
+
   async function queueDownload() {
     if (!readyToQueue || queueStatus === "queuing") return;
     queueStatus = "queuing";
@@ -228,19 +311,16 @@
           kind: kindId,
           symbol,
           format,
-          interval: interval || "0",
+          interval: interval || "tick",
           start: start || null,
           end: end || null,
           expiration: isOption ? (paramValues["expiration"] ?? null) : null,
-          strike: isOption
-            ? (paramValues["strike_filter_low"] && paramValues["strike_filter_high"]
-                ? `${paramValues["strike_filter_low"]}-${paramValues["strike_filter_high"]}`
-                : (paramValues["strike"] ?? null))
-            : null,
+          strike: isOption ? (paramValues["strike"] ?? null) : null,
           right:
             isOption && paramValues["right"] !== "both"
               ? (paramValues["right"] ?? null)
               : null,
+          extra: extraArgs(),
         };
         const n = await api.enqueue(args);
         totalTasks += n;
@@ -248,6 +328,10 @@
         if (!firstErr) firstErr = e instanceof Error ? e.message : String(e);
       }
     }
+
+    // The snapshot poll backs off when the queue is idle, so an
+    // enqueue has to announce itself or the pane lags behind the click.
+    await refreshQueueSnapshot();
 
     if (firstErr && totalTasks === 0) {
       queueStatus = "error";
@@ -279,7 +363,7 @@
           kind: twin,
           symbol,
           format,
-          interval: interval || "0",
+          interval: interval || "tick",
           start: start || null,
           end: end || null,
           expiration: isOption ? (paramValues["expiration"] ?? "*") : null,
@@ -292,6 +376,7 @@
             isOption && paramValues["right"] && paramValues["right"] !== "both"
               ? (paramValues["right"] ?? null)
               : null,
+          extra: extraArgs(),
         };
         const n = await api.enqueue(args);
         totalTasks += n;
@@ -299,6 +384,7 @@
         /* fail-silent — UI shows generic queue summary */
       }
     }
+    await refreshQueueSnapshot();
     log("info", `Cross-sell: queued ${totalTasks} ${suggestion.kind} tasks`);
     suggestion = null;
   }
@@ -473,7 +559,7 @@
 
     <!-- Cross-sell suggestion (post-queue) -->
     {#if suggestion}
-      <section class="cross-sell" role="region" aria-label="Suggested next download">
+      <section class="cross-sell" aria-label="Suggested next download">
         <div class="cross-sell-icon" aria-hidden="true">
           <Bookmark size={16} strokeWidth={1.75} />
         </div>
@@ -494,6 +580,17 @@
         </div>
       </section>
     {/if}
+
+    <!-- ── Bulk surfaces ─────────────────────────────────────────
+         Whole-day flat-file archives and index-constituent presets are
+         separate ways in: they queue by the day or by the index rather
+         than by the symbol-and-range flow above. Both have working
+         runners; they were built without ever being mounted, so nothing
+         could reach them. -->
+    <section class="bulk-shelves" aria-label="Bulk download surfaces">
+      <FlatfilesShelf />
+      <IndexPresetsShelf />
+    </section>
 
     <!-- Bottom padding so footer doesn't obscure last section -->
     <div class="footer-spacer"></div>
@@ -520,6 +617,12 @@
               ~{taskEstimate.toLocaleString()} tasks
             </span>
           {/if}
+        </span>
+      {:else if isRunOnce}
+        <span class="summary-placeholder">
+          {readyToRun
+            ? `${summaryKindTitle} answers one question — it runs once and writes a file, rather than queueing per-day tasks.`
+            : "Pick a symbol to run this lookup."}
         </span>
       {:else}
         <span class="summary-placeholder">Complete the steps above to queue a download.</span>
@@ -550,6 +653,17 @@
         >
           <ArrowUpRight size={16} strokeWidth={1.75} />
           Upgrade to {upgradeRequiredTier}
+        </button>
+      {:else if isRunOnce}
+        <button
+          type="button"
+          class="btn btn-primary queue-btn"
+          onclick={runOnce}
+          disabled={!readyToRun}
+          aria-label="Run endpoint once"
+        >
+          <Play size={16} strokeWidth={1.75} />
+          Run once
         </button>
       {:else}
         <button
@@ -744,7 +858,7 @@
   .recommended-tag {
     padding: 1px 6px;
     border-radius: var(--r-pill);
-    background: rgba(93, 212, 160, 0.15);
+    background: var(--good-tint);
     color: var(--good);
     font-size: 10px;
     font-weight: var(--weight-semi);
@@ -787,6 +901,15 @@
     display: flex;
     gap: var(--sp-2);
     flex-shrink: 0;
+  }
+
+  .bulk-shelves {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-8);
+    margin-top: var(--sp-8);
+    padding-top: var(--sp-8);
+    border-top: 1px solid var(--border);
   }
 
   .footer-spacer { height: 96px; }

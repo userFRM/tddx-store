@@ -32,6 +32,9 @@
     openComposer,
     DATASETS,
     type DatasetMeta,
+    datasetFromCatalogue,
+    datasetById,
+    log,
   } from "$lib/stores/app.svelte";
   import { listSavedSearches, touchSavedSearch, type SavedSearch } from "$lib/persistence/savedSearches";
 
@@ -53,14 +56,20 @@
   let highlight = $state(0);
   let inputEl = $state<HTMLInputElement | null>(null);
 
+  // Every dataset the account can reach, not the seven-entry static
+  // mirror this used to search — that covered a ninth of the catalogue
+  // and made the palette useless for the rest.
   const datasetItems = $derived<Item[]>(
-    DATASETS.map((d) => ({
-      kind: "dataset" as const,
-      label: d.title,
-      dataset: d,
-      hint: `${d.assetClass.toUpperCase()} · ${d.cadence}`,
-      icon: d.assetClass === "option" ? BarChart2 : TrendingUp,
-    })),
+    app.catalogue.map((e) => {
+      const d = datasetFromCatalogue(e);
+      return {
+        kind: "dataset" as const,
+        label: d.title,
+        dataset: d,
+        hint: `${d.assetClass.toUpperCase()} · ${e.name}`,
+        icon: d.assetClass === "option" ? BarChart2 : TrendingUp,
+      };
+    }),
   );
 
   const symbolItems = $derived<Item[]>(
@@ -124,11 +133,19 @@
       openDetail(item.dataset);
     } else if (item.kind === "symbol") {
       // Drop into the composer pre-populated with this symbol.
-      openComposer(DATASETS[0]);
+      openComposer(datasetById("stock_history_trade_quote") ?? DATASETS[0]);
       app.composer.symbol = item.symbol;
     } else if (item.kind === "saved") {
       touchSavedSearch(item.saved.id);
-      const ds = DATASETS.find((d) => d.id === item.saved.kind) ?? DATASETS[0];
+      // Resolve against the live catalogue. Falling back to the first
+      // static entry silently opened the composer on the wrong dataset
+      // for any saved search outside the original seven.
+      const ds = datasetById(item.saved.kind);
+      if (!ds) {
+        log("error", `Saved search "${item.saved.name}" names an unknown dataset (${item.saved.kind})`);
+        close();
+        return;
+      }
       openComposer(ds);
       app.composer.symbol = item.saved.symbols.join(", ");
       app.composer.start = item.saved.start ?? "";
@@ -195,11 +212,15 @@
           placeholder="Search datasets, symbols, saved searches…"
           autocomplete="off"
           spellcheck="false"
+          role="combobox"
+          aria-expanded="true"
+          aria-controls="cmdk-list"
+          aria-activedescendant={filtered.length ? `cmdk-option-${highlight}` : undefined}
         />
         <span class="hint text-caption">Esc</span>
       </header>
 
-      <ul class="list" role="listbox">
+      <ul id="cmdk-list" class="list" role="listbox" aria-label="Results">
         {#if filtered.length === 0}
           <li class="empty fg-muted">
             No matches. {#if !app.symbols.loadedAt}
@@ -209,13 +230,18 @@
         {/if}
         {#each filtered as item, i (item.kind + ":" + item.label)}
           {@const Icon = item.icon}
+          <!-- Keyboard lives on the input via `aria-activedescendant`,
+               which is the combobox pattern; the pointer handlers here
+               are the mouse half of the same control. -->
           <li
+            id="cmdk-option-{i}"
             class="row"
             class:active={i === highlight}
             role="option"
             aria-selected={i === highlight}
             onmouseenter={() => (highlight = i)}
             onclick={() => pick(item)}
+            onkeydown={(e) => e.key === "Enter" && pick(item)}
           >
             <span class="row-icon"><Icon size={14} /></span>
             <span class="row-label">{item.label}</span>
@@ -247,7 +273,7 @@
 <style>
   .backdrop {
     position: fixed; inset: 0;
-    background: rgba(8, 11, 18, 0.55);
+    background: var(--scrim);
     backdrop-filter: blur(6px);
     display: flex; align-items: flex-start; justify-content: center;
     padding-top: 12vh;

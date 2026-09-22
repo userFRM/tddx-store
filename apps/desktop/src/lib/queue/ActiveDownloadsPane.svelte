@@ -20,7 +20,7 @@
     ChevronRight,
     ChevronLeft,
   } from "lucide-svelte";
-  import { app } from "$lib/stores/app.svelte";
+  import { app, log, refreshQueueSnapshot } from "$lib/stores/app.svelte";
   import { api, fmtBytes, fmtNum, type TaskView } from "$lib/api";
 
   // ── Throughput estimator (rolling, from successive snapshots) ─────
@@ -121,11 +121,49 @@
 
   onDestroy(stopTick);
 
+  // Both of these can fail for reasons the user can act on — not
+  // connected, queue db locked, no failed rows — so the failure has to
+  // reach them. Swallowing it left the button looking broken.
+  let busy = $state(false);
+  /** Whether a worker pool is already in flight. `run_queue` returns
+   *  false rather than erroring when one is, so without this the Start
+   *  button looks available during a run and does nothing when
+   *  clicked. Polled alongside the queue snapshot. */
+  let poolActive = $state(false);
+  $effect(() => {
+    void app.queueSnap;
+    api.workerPoolActive()
+      .then((v) => (poolActive = v))
+      .catch(() => {});
+  });
+
   async function startWorkers() {
-    try { await api.runQueue(); } catch {}
+    busy = true;
+    try {
+      const started = await api.runQueue();
+      await refreshQueueSnapshot();
+      poolActive = true;
+      log("info", started ? "Workers started" : "Workers are already running");
+    } catch (e) {
+      log("error", `Could not start workers: ${errText(e)}`);
+    } finally {
+      busy = false;
+    }
   }
   async function retryFailed() {
-    try { await api.requeueFailed(); } catch {}
+    busy = true;
+    try {
+      const n = await api.requeueFailed();
+      await refreshQueueSnapshot();
+      log("info", n > 0 ? `Requeued ${n} failed task${n === 1 ? "" : "s"}` : "Nothing to retry");
+    } catch (e) {
+      log("error", `Could not retry failed tasks: ${errText(e)}`);
+    } finally {
+      busy = false;
+    }
+  }
+  function errText(e: unknown): string {
+    return e instanceof Error ? e.message : String(e);
   }
 
   // ── Visibility + collapse state ─────────────────────────────────
@@ -162,12 +200,12 @@
       <span class="text-caption">Downloads</span>
       <div class="pane-actions">
         {#if pending > 0 && running.length === 0}
-          <button class="btn-icon" onclick={startWorkers} title="Start workers">
+          <button class="btn-icon" onclick={startWorkers} disabled={busy || poolActive} title={poolActive ? "Workers already running" : "Start workers"}>
             <Play size={14} />
           </button>
         {/if}
         {#if failed > 0}
-          <button class="btn-icon" onclick={retryFailed} title="Retry failed">
+          <button class="btn-icon" onclick={retryFailed} disabled={busy} title="Retry failed">
             <RotateCcw size={14} />
           </button>
         {/if}
@@ -224,9 +262,9 @@
               <div class="task-head">
                 <div class="task-title">
                   <span class="task-symbol">{t.symbol}</span>
-                  <span class="task-kind text-mono">{t.kind}</span>
+                  <span class="task-kind text-figures">{t.kind}</span>
                 </div>
-                <span class="task-date text-mono">{t.date}</span>
+                <span class="task-date text-figures">{t.date}</span>
               </div>
               <div class="progress-track">
                 <div
@@ -250,7 +288,7 @@
         <div class="empty-active">
           <Pause size={20} />
           <p class="text-body-sm fg-muted">{fmtNum(pending)} queued — workers idle.</p>
-          <button class="btn btn-primary" onclick={startWorkers}>
+          <button class="btn btn-primary" onclick={startWorkers} disabled={busy || poolActive}>
             <Play size={14} fill="currentColor" />
             Start
           </button>
@@ -277,7 +315,7 @@
       <section class="section">
         <div class="section-header">
           <span class="text-caption">Failed</span>
-          <button class="btn-icon" onclick={retryFailed} title="Retry all failed">
+          <button class="btn-icon" onclick={retryFailed} disabled={busy} title="Retry all failed">
             <RotateCcw size={12} />
           </button>
         </div>
@@ -288,9 +326,9 @@
                 <div class="task-title">
                   <span class="task-icon"><XCircle size={12} /></span>
                   <span class="task-symbol">{t.symbol}</span>
-                  <span class="task-kind text-mono">{t.kind}</span>
+                  <span class="task-kind text-figures">{t.kind}</span>
                 </div>
-                <span class="task-date text-mono">{t.date}</span>
+                <span class="task-date text-figures">{t.date}</span>
               </div>
               {#if t.error}
                 <div class="task-error text-body-sm" title={t.error}>
@@ -316,9 +354,9 @@
                 <div class="task-title">
                   <span class="task-icon"><CheckCircle2 size={12} /></span>
                   <span class="task-symbol">{t.symbol}</span>
-                  <span class="task-kind text-mono">{t.kind}</span>
+                  <span class="task-kind text-figures">{t.kind}</span>
                 </div>
-                <span class="task-date text-mono">{t.date}</span>
+                <span class="task-date text-figures">{t.date}</span>
               </div>
               <div class="task-meta tabnum">
                 <span>{fmtNum(t.rows)} rows</span>

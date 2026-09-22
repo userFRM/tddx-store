@@ -17,7 +17,8 @@
   } from "lucide-svelte";
   import { ArrowUpRight, Lock } from "lucide-svelte";
   import { api, type EnqueueArgs, type Transforms } from "$lib/api";
-  import { composer, closeComposer, app, tierForKind } from "$lib/stores/app.svelte";
+  import { composer, closeComposer, app, tierForKind, refreshQueueSnapshot, log } from "$lib/stores/app.svelte";
+  import IntervalPicker from "$lib/catalogue/IntervalPicker.svelte";
   import SymbolPicker from "$lib/composer/SymbolPicker.svelte";
   import DateRangeSlider from "$lib/composer/DateRangeSlider.svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
@@ -65,19 +66,26 @@
       // "QUOTE" kind for both endpoints.
       const isOption = ds.assetClass === "option";
       const endpoint = isOption ? "option_list_dates" : "stock_list_dates";
-      // request_type: TRADE for any *_trade* kind, QUOTE otherwise. The
-      // server uses this only as a presence-filter (does this date have
-      // any rows of that kind?) — we want the broader set, so prefer
-      // TRADE which is denser than QUOTE on most tiers.
-      const request_type = ds.cadence === "quote" ? "QUOTE" : "TRADE";
+      // request_type is a presence filter — does this date have any
+      // rows of that kind? We want the broader set, so prefer trade,
+      // which is denser than quote on most tiers, and only ask about
+      // quotes for a dataset that carries nothing else.
+      const request_type =
+        /_quote$/.test(ds.id) && !/trade/.test(ds.id) ? "quote" : "trade";
       const args: Record<string, string> = {
         request_type,
         symbol: composer.symbol.trim().toUpperCase(),
       };
+      // `option_list_dates` declares expiration as required; without it
+      // the dispatcher rejects the call before it reaches the wire, and
+      // the empty catch below turned that into a silently empty date
+      // list for every option dataset. `*` is the documented wildcard.
+      if (isOption) args.expiration = "*";
       const list = await api.listQuery({ endpoint, args });
       availableDates = list;
-    } catch {
+    } catch (e: unknown) {
       availableDates = [];
+      log("warn", `Could not list available dates: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       datesLoading = false;
     }
@@ -168,6 +176,9 @@
         if (!firstErr) firstErr = e instanceof Error ? e.message : String(e);
       }
     }
+    // The snapshot poll backs off when the queue is idle, so an
+    // enqueue has to announce itself or the pane lags behind the click.
+    await refreshQueueSnapshot();
     if (firstErr && totalTasks === 0) {
       composer.status = "error";
       composer.msg = firstErr;
@@ -198,6 +209,7 @@
   >
     <div
       class="composer"
+      tabindex="-1"
       bind:this={dialogEl}
       role="dialog"
       aria-modal="true"
@@ -228,7 +240,7 @@
             You're on <span class="tabnum">{verdict.user}</span>. Upgrade your
             ThetaData subscription to queue this dataset.
           </div>
-          <button class="btn-upgrade" onclick={handleUpgrade}>
+          <button class="btn btn-primary btn-sm" onclick={handleUpgrade}>
             <ArrowUpRight size={12} />
             Upgrade
           </button>
@@ -266,24 +278,20 @@
               <option value="json">JSON array</option>
             </select>
           </label>
-          {#if ds?.cadence === "quote"}
-            <label class="field-stack">
-              <span class="text-caption">Quote interval</span>
-              <select class="field-input" bind:value={composer.interval}>
-                <option value="0">0 — tick-by-tick</option>
-                <option value="1s">1s — sampled</option>
-                <option value="60s">60s — 1m sampled</option>
-              </select>
-            </label>
-          {:else}
-            <label class="field-stack">
-              <span class="text-caption">Priority</span>
-              <select class="field-input" disabled>
-                <option>Normal</option>
-              </select>
-            </label>
-          {/if}
         </div>
+
+        <!-- Granularity, when the endpoint declares one. This used to
+             key off `cadence === "quote"` — never true for a catalogue
+             dataset, so the control was invisible for every endpoint
+             that takes an interval — and offered the pre-v3 spellings
+             `0` / `60s` against a fixed list the server publishes. The
+             Browse step picker already reads the real options off the
+             catalogue, so use it rather than keeping a second list. The
+             branch it replaces showed a permanently disabled "Priority"
+             select, which was never a control at all. -->
+        {#if ds}
+          <IntervalPicker kindId={ds.id} bind:interval={composer.interval} />
+        {/if}
 
         {#if ds?.assetClass === "option"}
           <div class="row-3">
@@ -350,10 +358,10 @@
                 {/if}
                 {#each composer.renames as r, i}
                   <div class="rename-row">
-                    <input class="field-input text-mono" placeholder="upstream"
+                    <input class="field-input text-figures" placeholder="upstream"
                            bind:value={r.from} />
                     <ChevronRight size={12} class="arrow" />
-                    <input class="field-input text-mono" placeholder="renamed"
+                    <input class="field-input text-figures" placeholder="renamed"
                            bind:value={r.to} />
                     <button class="row-btn ghost" onclick={() => removeRename(i)} aria-label="Remove">
                       <Trash2 size={11} />
@@ -378,7 +386,7 @@
                 {/if}
                 {#each composer.drops as d, i}
                   <div class="drop-row">
-                    <input class="field-input text-mono" placeholder="column_name"
+                    <input class="field-input text-figures" placeholder="column_name"
                            bind:value={composer.drops[i]} />
                     <button class="row-btn ghost" onclick={() => removeDrop(i)} aria-label="Remove">
                       <Trash2 size={11} />
@@ -430,7 +438,7 @@
   .composer-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(8, 11, 18, 0.55);
+    background: var(--scrim);
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
     display: flex;
@@ -591,7 +599,7 @@
     font-size: 11px;
     cursor: pointer;
   }
-  .row-btn:hover { background: var(--accent-tint); color: var(--accent-hi); border-color: rgba(124,140,255,0.3); }
+  .row-btn:hover { background: var(--accent-tint); color: var(--accent-hi); border-color: var(--accent-ring); }
   .row-btn.ghost { background: transparent; }
   .hint code {
     font-family: var(--font-mono);
@@ -608,28 +616,13 @@
     gap: 10px;
     margin: 0 var(--sp-5);
     padding: 10px 12px;
-    background: rgba(244, 196, 48, 0.10);
-    border: 1px solid rgba(244, 196, 48, 0.32);
+    background: var(--warn-tint);
+    border: 1px solid var(--warn-tint);
     border-radius: var(--r-md);
-    color: rgb(212, 158, 0);
+    color: var(--warn);
     font-size: var(--text-body-sm);
   }
   .tier-banner-text { flex: 1; line-height: 1.4; color: var(--fg); }
   .tier-banner-text strong { color: var(--fg); }
-  .btn-upgrade {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 4px 10px;
-    border-radius: var(--r-sm);
-    border: 1px solid var(--accent, rgb(56, 132, 255));
-    background: var(--accent, rgb(56, 132, 255));
-    color: white;
-    font-weight: 600;
-    font-size: var(--text-body-sm);
-    cursor: pointer;
-    white-space: nowrap;
-  }
-  .btn-upgrade:hover { filter: brightness(1.08); }
   .upgrade-action :global(svg) { stroke-width: 2; }
 </style>

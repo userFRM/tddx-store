@@ -1,101 +1,225 @@
 <script lang="ts">
+  /**
+   * The download queue: filter, select, act.
+   *
+   * Selection is the reason this view exists in list form — a queue of
+   * a few thousand rows is only workable if you can pick a slice and
+   * act on all of it at once. Shift-click extends a range, the header
+   * box toggles everything visible, and the action bar appears only
+   * when something is selected so the resting state stays quiet.
+   *
+   * The snapshot carries the most recent rows, while the status counts
+   * cover the whole table. Anything that acts on "everything" therefore
+   * goes through a backend command that works in SQL, never by looping
+   * over what happens to be loaded.
+   */
   import {
     Play,
-    Pause,
     RotateCcw,
     ArrowUp,
     X,
     Copy,
     FolderOpen,
+    Trash2,
     CheckCircle2,
     XCircle,
     Clock,
     Circle,
     AlertCircle,
+    Search,
   } from "lucide-svelte";
-  import { app } from "$lib/stores/app.svelte";
-  import { api, fmtBytes, fmtNum } from "$lib/api";
+  import { revealItemInDir } from "@tauri-apps/plugin-opener";
+  import { app, log, refreshQueueSnapshot } from "$lib/stores/app.svelte";
+  import { api, fmtBytes, fmtNum, type TaskView } from "$lib/api";
 
   type StatusFilter = "all" | "pending" | "running" | "done" | "failed" | "empty";
 
+  const STATUS_LABELS: Record<StatusFilter, string> = {
+    all: "All",
+    pending: "Pending",
+    running: "Running",
+    done: "Done",
+    failed: "Failed",
+    empty: "Empty",
+  };
+  const FILTERS = Object.keys(STATUS_LABELS) as StatusFilter[];
+
   let activeFilter = $state<StatusFilter>("all");
-  let workersRunning = $state(false);
+  let query = $state("");
+  let selected = $state<Set<string>>(new Set());
+  let lastClicked = $state<string | null>(null);
+  let busy = $state(false);
   let actionMsg = $state("");
 
   const snap = $derived(app.queueSnap);
-
-  const totalCount = $derived(
-    snap?.counts.reduce((sum, [, n]) => sum + n, 0) ?? 0
+  const counts = $derived(new Map(snap?.counts ?? []));
+  const totalCount = $derived([...counts.values()].reduce((a, b) => a + b, 0));
+  const countOf = (f: StatusFilter) =>
+    f === "all" ? totalCount : (counts.get(f) ?? 0);
+  const finishedCount = $derived(
+    countOf("done") + countOf("failed") + countOf("empty"),
   );
 
-  const runningCount = $derived(snap?.counts.find(([s]) => s === "running")?.[1] ?? 0);
-  const pendingCount = $derived(snap?.counts.find(([s]) => s === "pending")?.[1] ?? 0);
-  const doneCount    = $derived(snap?.counts.find(([s]) => s === "done")?.[1] ?? 0);
-  const failedCount  = $derived(snap?.counts.find(([s]) => s === "failed")?.[1] ?? 0);
-  const emptyCount   = $derived(snap?.counts.find(([s]) => s === "empty")?.[1] ?? 0);
-
-  const filteredRows = $derived(() => {
-    const rows = snap?.recent ?? [];
-    if (activeFilter === "all") return rows;
-    return rows.filter(r => r.status === activeFilter);
+  const rows = $derived.by<TaskView[]>(() => {
+    const q = query.trim().toLowerCase();
+    return (snap?.recent ?? []).filter((r) => {
+      if (activeFilter !== "all" && r.status !== activeFilter) return false;
+      if (!q) return true;
+      return (
+        r.symbol.toLowerCase().includes(q) ||
+        r.kind.toLowerCase().includes(q) ||
+        r.date.includes(q)
+      );
+    });
   });
 
-  async function startWorkers() {
-    workersRunning = true;
+  // Selection only ever refers to rows the user can currently see, so a
+  // filter change drops anything that scrolled out of scope.
+  $effect(() => {
+    const visible = new Set(rows.map((r) => r.id));
+    if ([...selected].every((id) => visible.has(id))) return;
+    selected = new Set([...selected].filter((id) => visible.has(id)));
+  });
+
+  const selectedRows = $derived(rows.filter((r) => selected.has(r.id)));
+  const allVisibleSelected = $derived(
+    rows.length > 0 && rows.every((r) => selected.has(r.id)),
+  );
+  const someVisibleSelected = $derived(selected.size > 0 && !allVisibleSelected);
+  const canCancel = $derived(
+    selectedRows.some((r) => r.status === "pending" || r.status === "running"),
+  );
+
+  function toggleAllVisible() {
+    selected = allVisibleSelected ? new Set() : new Set(rows.map((r) => r.id));
+  }
+
+  /** Plain click toggles one row; shift-click extends from the last one
+   *  clicked, which is what every list of this shape does. */
+  function toggleRow(id: string, shiftKey: boolean) {
+    const next = new Set(selected);
+    if (shiftKey && lastClicked) {
+      const ids = rows.map((r) => r.id);
+      const from = ids.indexOf(lastClicked);
+      const to = ids.indexOf(id);
+      if (from !== -1 && to !== -1) {
+        const [lo, hi] = from < to ? [from, to] : [to, from];
+        for (const between of ids.slice(lo, hi + 1)) next.add(between);
+        selected = next;
+        lastClicked = id;
+        return;
+      }
+    }
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    selected = next;
+    lastClicked = id;
+  }
+
+  function clearSelection() {
+    selected = new Set();
+    lastClicked = null;
+  }
+
+  function onKeydown(e: KeyboardEvent) {
+    if (e.key === "Escape" && selected.size > 0) clearSelection();
+  }
+
+  /** Run an action, report what it did, refresh so the list reflects it
+   *  on the click rather than at the next poll. */
+  async function act(run: () => Promise<string>) {
+    if (busy) return;
+    busy = true;
     try {
-      await api.runQueue();
-      actionMsg = "Workers started";
-      setTimeout(() => (actionMsg = ""), 2000);
+      actionMsg = await run();
     } catch (e: unknown) {
       actionMsg = e instanceof Error ? e.message : String(e);
+      log("error", `Queue action failed: ${actionMsg}`);
+    } finally {
+      busy = false;
+      await refreshQueueSnapshot();
+      setTimeout(() => (actionMsg = ""), 3000);
     }
   }
 
-  async function retryFailed() {
-    try {
-      const n = await api.requeueFailed();
-      actionMsg = `Requeued ${n} task${n === 1 ? "" : "s"}`;
-      setTimeout(() => (actionMsg = ""), 2000);
-    } catch (e: unknown) {
-      actionMsg = e instanceof Error ? e.message : String(e);
-    }
-  }
+  const plural = (n: number, word: string) => `${fmtNum(n)} ${word}${n === 1 ? "" : "s"}`;
 
-  function etaStr(): string {
-    if (!snap) return "—";
-    const done = snap.counts.find(([s]) => s === "done")?.[1] ?? 0;
-    const running = snap.counts.find(([s]) => s === "running")?.[1] ?? 0;
-    const pending = snap.counts.find(([s]) => s === "pending")?.[1] ?? 0;
-    if (done === 0 || (running + pending) === 0) return "—";
-    // Rough ETA: not meaningful without per-task timing, so show pending count
-    return `${pending + running} remaining`;
-  }
+  const startWorkers = () =>
+    act(async () =>
+      (await api.runQueue()) ? "Workers started" : "Workers already running",
+    );
 
-  const STATUS_LABELS: Record<StatusFilter, string> = {
-    all:     "All",
-    pending: "Pending",
-    running: "Running",
-    done:    "Done",
-    failed:  "Failed",
-    empty:   "Empty",
-  };
+  const retryFailed = () =>
+    act(async () => `Requeued ${plural(await api.requeueFailed(), "task")}`);
+
+  const clearFinished = () =>
+    act(async () => `Removed ${plural(await api.clearTasks(), "finished task")}`);
+
+  const cancelSelected = () =>
+    act(async () => {
+      const n = await api.cancelTasks([...selected]);
+      clearSelection();
+      return `Cancelled ${plural(n, "task")}`;
+    });
+
+  const retrySelected = () =>
+    act(async () => {
+      const n = await api.requeueTasks([...selected]);
+      clearSelection();
+      return `Requeued ${plural(n, "task")}`;
+    });
+
+  const removeSelected = () =>
+    act(async () => {
+      const n = await api.removeTasks([...selected]);
+      clearSelection();
+      return `Removed ${plural(n, "task")}`;
+    });
+
+  const duplicateSelected = () =>
+    act(async () => {
+      const n = await api.duplicateTasks([...selected]);
+      clearSelection();
+      return `Queued ${plural(n, "copy")}`;
+    });
+
+  const bumpSelected = () =>
+    act(async () => {
+      const n = await api.bumpTasks([...selected]);
+      return n === 0
+        ? "Nothing left to move — already claimed"
+        : `Moved ${plural(n, "task")} to the front`;
+    });
+
+  const revealTask = (t: TaskView) =>
+    act(async () => {
+      await revealItemInDir(t.path);
+      return "";
+    });
+
+  /** Remaining work, which is the only honest thing to say: task
+   *  duration varies by symbol and date range, so a time estimate from
+   *  a rolling average would be fiction. */
+  const remaining = $derived(countOf("pending") + countOf("running"));
 </script>
 
+<svelte:window onkeydown={onKeydown} />
+
 <div class="queue-view">
-  <!-- Header bar -->
+  <!-- Header: what the queue holds, and what to do with all of it -->
   <div class="queue-header">
     <div class="header-left">
       <h1 class="queue-title">Queue</h1>
       {#if snap}
-        <span class="queue-meta text-mono">
-          <span>{fmtNum(totalCount)} tasks</span>
+        <span class="queue-meta text-figures">
+          <span>{plural(totalCount, "task")}</span>
           <span class="sep">·</span>
           <span>{fmtBytes(snap.bytes_on_disk)} on disk</span>
           <span class="sep">·</span>
-          <span>{snap.files_on_disk} files</span>
-          {#if etaStr() !== "—"}
+          <span>{fmtNum(snap.files_on_disk)} files</span>
+          {#if remaining > 0}
             <span class="sep">·</span>
-            <span>{etaStr()}</span>
+            <span>{fmtNum(remaining)} remaining</span>
           {/if}
         </span>
       {/if}
@@ -103,48 +227,111 @@
 
     <div class="header-actions">
       {#if actionMsg}
-        <span class="action-feedback text-body-sm">{actionMsg}</span>
+        <span class="action-feedback text-body-sm" role="status">{actionMsg}</span>
       {/if}
-      <button class="btn btn-primary" onclick={startWorkers} disabled={workersRunning && runningCount > 0}>
+      <button class="btn btn-primary" onclick={startWorkers} disabled={busy || remaining === 0}>
         <Play size={13} strokeWidth={1.75} />
         Start workers
       </button>
-      {#if failedCount > 0}
-        <button class="btn btn-secondary" onclick={retryFailed}>
+      {#if countOf("failed") > 0}
+        <button class="btn btn-secondary" onclick={retryFailed} disabled={busy}>
           <RotateCcw size={13} strokeWidth={1.75} />
-          Retry failed ({failedCount})
+          Retry failed ({fmtNum(countOf("failed"))})
+        </button>
+      {/if}
+      {#if finishedCount > 0}
+        <button class="btn btn-secondary" onclick={clearFinished} disabled={busy}>
+          <Trash2 size={13} strokeWidth={1.75} />
+          Clear finished ({fmtNum(finishedCount)})
         </button>
       {/if}
     </div>
   </div>
 
-  <!-- Status filter pills -->
-  <div class="filter-bar" role="group" aria-label="Status filter">
-    {#each (["all", "pending", "running", "done", "failed", "empty"] as StatusFilter[]) as f}
-      {@const count = f === "all" ? totalCount
-        : f === "pending" ? pendingCount
-        : f === "running" ? runningCount
-        : f === "done"    ? doneCount
-        : f === "failed"  ? failedCount
-        : emptyCount}
-      <button
-        class="filter-pill"
-        class:active={activeFilter === f}
-        class:filter-running={f === "running"}
-        class:filter-done={f === "done"}
-        class:filter-failed={f === "failed"}
-        class:filter-empty={f === "empty"}
-        onclick={() => (activeFilter = f)}
-        aria-pressed={activeFilter === f}
-      >
-        {STATUS_LABELS[f]}
-        <span class="filter-count text-mono">{fmtNum(count)}</span>
-      </button>
-    {/each}
+  <!-- Filter row -->
+  <div class="filter-bar">
+    <div class="filter-pills" role="group" aria-label="Status filter">
+      {#each FILTERS as f}
+        <button
+          class="filter-pill"
+          class:active={activeFilter === f}
+          class:filter-running={f === "running"}
+          class:filter-done={f === "done"}
+          class:filter-failed={f === "failed"}
+          class:filter-empty={f === "empty"}
+          onclick={() => (activeFilter = f)}
+          aria-pressed={activeFilter === f}
+        >
+          {STATUS_LABELS[f]}
+          <span class="filter-count text-figures">{fmtNum(countOf(f))}</span>
+        </button>
+      {/each}
+    </div>
+
+    <div class="search-wrap">
+      <Search size={14} strokeWidth={1.75} class="search-icon" aria-hidden="true" />
+      <input
+        class="search-input"
+        type="search"
+        placeholder="Filter symbol, dataset or date…"
+        bind:value={query}
+        aria-label="Filter tasks"
+      />
+    </div>
   </div>
 
-  <!-- Task rows -->
-  <div class="task-list" role="list">
+  <!-- Selection action bar. Present only when something is selected. -->
+  {#if selected.size > 0}
+    <div class="bulk-bar" role="region" aria-label="Actions for selected tasks">
+      <span class="bulk-count">{plural(selected.size, "task")} selected</span>
+      <div class="bulk-actions">
+        <button class="btn btn-secondary" onclick={bumpSelected} disabled={busy}>
+          <ArrowUp size={13} strokeWidth={1.75} /> Move to front
+        </button>
+        <button class="btn btn-secondary" onclick={duplicateSelected} disabled={busy}>
+          <Copy size={13} strokeWidth={1.75} /> Duplicate
+        </button>
+        <button class="btn btn-secondary" onclick={retrySelected} disabled={busy}>
+          <RotateCcw size={13} strokeWidth={1.75} /> Retry
+        </button>
+        <button class="btn btn-secondary" onclick={cancelSelected} disabled={busy || !canCancel}>
+          <X size={13} strokeWidth={1.75} /> Cancel
+        </button>
+        <button
+          class="btn btn-secondary danger"
+          onclick={removeSelected}
+          disabled={busy}
+          title="Delete these tasks from the queue. Anything still running stops being tracked."
+        >
+          <Trash2 size={13} strokeWidth={1.75} /> Remove
+        </button>
+      </div>
+      <button class="btn btn-ghost" onclick={clearSelection}>Clear selection</button>
+    </div>
+  {/if}
+
+  <!-- Rows -->
+  <div class="task-list">
+    {#if rows.length > 0}
+      <div class="list-head">
+        <label class="select-cell">
+          <input
+            type="checkbox"
+            checked={allVisibleSelected}
+            indeterminate={someVisibleSelected}
+            onchange={toggleAllVisible}
+            aria-label="Select all visible tasks"
+          />
+        </label>
+        <span class="head-label text-caption">
+          {plural(rows.length, "task")} shown
+          {#if totalCount > rows.length}
+            <span class="fg-subtle">of {fmtNum(totalCount)}</span>
+          {/if}
+        </span>
+      </div>
+    {/if}
+
     {#if app.connState !== "connected" && (snap === null || totalCount === 0)}
       <div class="empty-queue">
         <div class="empty-icon" aria-hidden="true">
@@ -160,9 +347,21 @@
         </p>
       </div>
     {:else}
-      {#each filteredRows() as task (task.id)}
-        <div class="task-row" role="listitem" class:row-running={task.status === "running"}>
-          <!-- Status indicator -->
+      {#each rows as task (task.id)}
+        <div
+          class="task-row"
+          class:row-running={task.status === "running"}
+          class:row-selected={selected.has(task.id)}
+        >
+          <label class="select-cell">
+            <input
+              type="checkbox"
+              checked={selected.has(task.id)}
+              onclick={(e) => toggleRow(task.id, e.shiftKey)}
+              aria-label="Select {task.symbol} {task.date}"
+            />
+          </label>
+
           <div class="task-status" aria-label="Status: {task.status}">
             {#if task.status === "running"}
               <Circle size={14} strokeWidth={1.75} style="color: var(--accent); animation: pulse-dot 1.2s ease-in-out infinite;" />
@@ -177,20 +376,18 @@
             {/if}
           </div>
 
-          <!-- Main content -->
           <div class="task-main">
             <div class="task-top">
               <code class="task-kind">{task.kind}</code>
               <span class="task-symbol">{task.symbol}</span>
-              <span class="task-date text-mono">{task.date}</span>
+              <span class="task-date text-figures">{task.date}</span>
             </div>
 
             {#if task.status === "running"}
               <!--
-                Indeterminate progress: the SDK doesn't surface row-level
-                progress mid-call, so a static % was a lie. Use a CSS
-                shimmer that pings 30%-70% so the user reads "in flight,
-                still alive" without faking a fixed completion ratio.
+                Indeterminate progress: the SDK does not surface row-level
+                progress mid-call, so a percentage would be a lie. The
+                shimmer says "in flight, still alive" and nothing more.
               -->
               <div class="task-progress">
                 <div class="progress-track">
@@ -204,46 +401,87 @@
             {/if}
           </div>
 
-          <!-- Stats -->
           <div class="task-stats">
             {#if task.rows != null}
-              <span class="stat text-mono">{fmtNum(task.rows)} rows</span>
+              <span class="stat text-figures">{fmtNum(task.rows)} rows</span>
             {/if}
             {#if task.bytes != null}
-              <span class="stat text-mono">{fmtBytes(task.bytes)}</span>
+              <span class="stat text-figures">{fmtBytes(task.bytes)}</span>
             {/if}
             {#if task.attempts > 1}
               <span class="stat attempts">attempt {task.attempts}</span>
             {/if}
           </div>
 
-          <!-- Row actions (hover) -->
           <div class="task-actions" aria-label="Row actions">
             {#if task.status === "pending"}
-              <button class="btn-icon" title="Bump priority" aria-label="Bump priority">
+              <button
+                class="btn-icon"
+                onclick={() => act(async () => {
+                  const n = await api.bumpTasks([task.id]);
+                  return n ? `${task.symbol} ${task.date} moved to the front` : "Already claimed by a worker";
+                })}
+                title="Move to the front of the queue"
+                aria-label="Move {task.symbol} {task.date} to the front of the queue"
+              >
                 <ArrowUp size={13} strokeWidth={1.75} />
               </button>
             {/if}
-            <button class="btn-icon" title="Duplicate" aria-label="Duplicate task">
+            <button
+              class="btn-icon"
+              onclick={() => act(async () => {
+                await api.duplicateTasks([task.id]);
+                return `Queued another ${task.symbol} ${task.date}`;
+              })}
+              title="Queue another copy"
+              aria-label="Queue another copy of {task.symbol} {task.date}"
+            >
               <Copy size={13} strokeWidth={1.75} />
             </button>
             {#if task.status === "done"}
-              <button class="btn-icon" title="Open file location" aria-label="Open file location">
+              <button
+                class="btn-icon"
+                onclick={() => revealTask(task)}
+                title="Show the file"
+                aria-label="Show the file for {task.symbol} {task.date}"
+              >
                 <FolderOpen size={13} strokeWidth={1.75} />
               </button>
             {/if}
-            {#if task.status !== "done"}
-              <button class="btn-icon danger" title="Cancel" aria-label="Cancel task">
+            {#if task.status === "pending" || task.status === "running"}
+              <button
+                class="btn-icon danger"
+                onclick={() => act(async () => {
+                  await api.cancelTasks([task.id]);
+                  return `Cancelled ${task.symbol} ${task.date}`;
+                })}
+                title="Stop this task, keep the row"
+                aria-label="Cancel {task.symbol} {task.date}"
+              >
                 <X size={13} strokeWidth={1.75} />
               </button>
             {/if}
+            <button
+              class="btn-icon danger"
+              onclick={() => act(async () => {
+                await api.removeTasks([task.id]);
+                return `Removed ${task.symbol} ${task.date}`;
+              })}
+              title="Delete this task from the queue"
+              aria-label="Remove {task.symbol} {task.date} from the queue"
+            >
+              <Trash2 size={13} strokeWidth={1.75} />
+            </button>
           </div>
         </div>
       {/each}
 
-      {#if filteredRows().length === 0 && totalCount > 0}
+      {#if rows.length === 0 && totalCount > 0}
         <div class="empty-filter">
-          <p class="text-body-sm fg-muted">No {activeFilter} tasks.</p>
+          <p class="text-body-sm fg-muted">
+            No tasks match {activeFilter === "all" ? "" : STATUS_LABELS[activeFilter].toLowerCase()}
+            {query ? `"${query}"` : ""}.
+          </p>
         </div>
       {/if}
     {/if}
@@ -317,14 +555,105 @@
   .filter-bar {
     display: flex;
     align-items: center;
-    gap: var(--sp-2);
+    justify-content: space-between;
+    gap: var(--sp-4);
     padding: var(--sp-3) var(--sp-8);
     flex-shrink: 0;
     border-bottom: 1px solid var(--border);
+  }
+  .filter-pills {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
     overflow-x: auto;
     scrollbar-width: none;
   }
-  .filter-bar::-webkit-scrollbar { display: none; }
+  .filter-pills::-webkit-scrollbar { display: none; }
+
+  .search-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    width: 260px;
+  }
+  .search-wrap :global(.search-icon) {
+    position: absolute;
+    left: var(--sp-2);
+    color: var(--fg-subtle);
+    pointer-events: none;
+  }
+  .search-input {
+    width: 100%;
+    height: 30px;
+    padding: 0 var(--sp-2) 0 var(--sp-6);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    color: var(--fg);
+    font-size: var(--text-body-sm);
+    outline: none;
+  }
+  .search-input:focus-visible {
+    border-color: var(--accent);
+    box-shadow: var(--shadow-glow-accent);
+  }
+  .search-input::placeholder { color: var(--fg-subtle); }
+
+  /* Selection action bar. Only mounted when something is selected, so
+     the resting list stays quiet. */
+  .bulk-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-4);
+    padding: var(--sp-2) var(--sp-8);
+    flex-shrink: 0;
+    background: var(--accent-tint);
+    border-bottom: 1px solid var(--accent-ring);
+  }
+  .bulk-count {
+    font-size: var(--text-body-sm);
+    font-weight: var(--weight-semi);
+    color: var(--fg);
+    white-space: nowrap;
+  }
+  .bulk-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    flex-wrap: wrap;
+  }
+  .bulk-bar .btn-ghost { margin-left: auto; }
+  .btn.danger { color: var(--bad); }
+  .btn.danger:hover:not(:disabled) { border-color: var(--bad-ring); background: var(--bad-tint); }
+
+  /* Header strip above the rows: the select-all box lines up with the
+     per-row boxes below it. */
+  .list-head {
+    display: grid;
+    grid-template-columns: 20px 1fr;
+    align-items: center;
+    gap: var(--sp-4);
+    padding: var(--sp-2) var(--sp-8);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 1;
+  }
+  .head-label { color: var(--fg-muted); }
+
+  .select-cell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+  .select-cell input {
+    accent-color: var(--accent);
+    cursor: pointer;
+    margin: 0;
+  }
 
   .filter-pill {
     display: inline-flex;
@@ -353,9 +682,9 @@
     border-color: var(--border-strong);
   }
   .filter-pill.active.filter-running { color: var(--accent-hi); border-color: var(--accent-tint); background: var(--accent-tint); }
-  .filter-pill.active.filter-done    { color: var(--good); border-color: rgba(93,212,160,0.2); background: rgba(93,212,160,0.08); }
-  .filter-pill.active.filter-failed  { color: var(--bad);  border-color: rgba(255,126,126,0.2); background: rgba(255,126,126,0.08); }
-  .filter-pill.active.filter-empty   { color: var(--warn); border-color: rgba(245,197,111,0.2); background: rgba(245,197,111,0.08); }
+  .filter-pill.active.filter-done    { color: var(--good); border-color: var(--good-tint); background: var(--good-tint); }
+  .filter-pill.active.filter-failed  { color: var(--bad);  border-color: var(--bad-tint); background: var(--bad-tint); }
+  .filter-pill.active.filter-empty   { color: var(--warn); border-color: var(--warn-tint); background: var(--warn-tint); }
 
   .filter-count {
     font-size: var(--text-caption);
@@ -374,7 +703,7 @@
 
   .task-row {
     display: grid;
-    grid-template-columns: 20px 1fr auto auto;
+    grid-template-columns: 20px 20px 1fr auto auto;
     align-items: center;
     gap: var(--sp-4);
     padding: var(--sp-3) var(--sp-8);
@@ -386,8 +715,12 @@
   .task-row:hover { background: var(--surface-1); }
 
   .task-row.row-running {
-    background: rgba(124, 140, 255, 0.03);
+    background: var(--accent-tint-weak);
   }
+  .task-row.row-selected {
+    background: var(--accent-tint);
+  }
+  .task-row.row-selected:hover { background: var(--accent-tint-strong); }
 
   .task-status {
     display: flex;
@@ -412,7 +745,7 @@
 
   .task-kind {
     font-family: var(--font-mono);
-    font-size: var(--text-mono);
+    font-size: var(--text-figures);
     color: var(--fg-muted);
     background: var(--surface-2);
     padding: 1px var(--sp-2);
@@ -422,7 +755,7 @@
   .task-symbol {
     font-weight: var(--weight-semi);
     font-family: var(--font-mono);
-    font-size: var(--text-mono);
+    font-size: var(--text-figures);
     color: var(--fg);
     font-variant-numeric: tabular-nums;
   }

@@ -4,9 +4,9 @@
 //! lives in `tier::ENDPOINT_META_TABLE`; runtime override fetched on
 //! launch lives in this module's `RUNTIME_META`.
 //!
-//! Use `endpoint_meta(op)` everywhere that needs a human-readable
-//! description, summary, or UI tag — never hand-code copy in the FE
-//! that's already in the yaml.
+//! Use `catalogue()` wherever the UI needs a human-readable summary,
+//! description or tag — never hand-code copy in the frontend that is
+//! already in the yaml.
 
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
@@ -25,33 +25,6 @@ pub struct EndpointMeta {
 }
 
 static RUNTIME_META: OnceLock<RwLock<Option<HashMap<String, EndpointMeta>>>> = OnceLock::new();
-
-/// Lookup metadata for one endpoint by operationId. Runtime override
-/// (from the freshly-fetched yaml) takes priority over the build-time
-/// table; falls through to `None` for unknown ops.
-pub fn endpoint_meta(operation_id: &str) -> Option<EndpointMeta> {
-    if let Some(cell) = RUNTIME_META.get() {
-        if let Ok(guard) = cell.read() {
-            if let Some(map) = guard.as_ref() {
-                if let Some(m) = map.get(operation_id) {
-                    return Some(m.clone());
-                }
-            }
-        }
-    }
-    for &(op, summary, description, tag, min_tier) in ENDPOINT_META_TABLE {
-        if op == operation_id {
-            return Some(EndpointMeta {
-                operation_id: op.to_string(),
-                summary: summary.to_string(),
-                description: description.to_string(),
-                tag: tag.to_string(),
-                min_tier,
-            });
-        }
-    }
-    None
-}
 
 /// Whole catalogue. Runtime override merges with the build-time table —
 /// runtime entries win, build-time entries fill gaps for ops the
@@ -91,5 +64,33 @@ pub fn install_runtime_meta(map: HashMap<String, EndpointMeta>) {
     let cell = RUNTIME_META.get_or_init(|| RwLock::new(None));
     if let Ok(mut guard) = cell.write() {
         *guard = Some(map);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The desktop Browse catalogue inner-joins the SDK endpoint
+    /// registry against this table on `operation_id`, and silently
+    /// drops anything that misses. A registry endpoint with no entry
+    /// here would therefore vanish from the UI with no error — the
+    /// user simply could not download it. Assert the join is total.
+    #[test]
+    fn every_registry_endpoint_has_catalogue_metadata() {
+        let have: HashMap<&str, ()> = ENDPOINT_META_TABLE
+            .iter()
+            .map(|&(op, ..)| (op, ()))
+            .collect();
+        let missing: Vec<&str> = thetadatadx::ENDPOINTS
+            .iter()
+            .map(|m| m.name)
+            .filter(|n| !have.contains_key(n))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "{} registry endpoint(s) would disappear from Browse: {missing:?}",
+            missing.len()
+        );
     }
 }

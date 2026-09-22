@@ -25,7 +25,7 @@ toml = "0.8"
 
 [dependencies]
 tdds-core = { path = "../../../crates/tdds-core" }
-thetadatadx = { git = "https://github.com/userFRM/ThetaDataDx", tag = "v10.0.0", features = ["arrow"] }
+thetadatadx.workspace = true
 indexkit = { git = "https://github.com/userFRM/indexkit", branch = "main", optional = true }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"

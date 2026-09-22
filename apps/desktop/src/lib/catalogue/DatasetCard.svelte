@@ -22,6 +22,8 @@
     try { await openUrl(upgradeUrl); } catch {}
   }
 
+  const AssetIcon = $derived(assetIcon(dataset.assetClass));
+
   function assetIcon(assetClass: DatasetMeta["assetClass"]) {
     switch (assetClass) {
       case "stock":  return TrendingUp;
@@ -62,22 +64,11 @@
   }
 </script>
 
-<article
-  class="card"
-  class:queued
-  class:gated
-  role="button"
-  tabindex="0"
-  aria-label={gated
-    ? `${dataset.title} — requires ${verdict.required} tier`
-    : `Open ${dataset.title}`}
-  onclick={openDetail}
-  onkeydown={(e) => e.key === "Enter" && openDetail()}
->
+<article class="card" class:queued class:gated>
   <!-- Header row: asset class + cadence label + tier pill -->
   <div class="card-header">
     <div class="asset-badge">
-      <svelte:component this={assetIcon(dataset.assetClass)} size={12} strokeWidth={1.75} />
+      <AssetIcon size={12} strokeWidth={1.75} />
       <span>{assetLabel(dataset.assetClass)}</span>
     </div>
     <span class="cadence-tag">{cadenceLabel(dataset.cadence)}</span>
@@ -91,7 +82,18 @@
 
   <!-- Title + subtitle -->
   <div class="card-body">
-    <h3 class="card-title">{dataset.title}</h3>
+    <h3 class="card-title">
+      <button
+        type="button"
+        class="card-open"
+        aria-label={gated
+          ? `${dataset.title}, requires ${verdict.required} tier`
+          : `Open ${dataset.title}`}
+        onclick={openDetail}
+      >
+        {dataset.title}
+      </button>
+    </h3>
     <p class="card-subtitle">{dataset.subtitle}</p>
   </div>
 
@@ -107,7 +109,7 @@
       </button>
     {:else if gated && showUpgrade}
       <button
-        class="btn-upgrade"
+        class="btn btn-primary btn-sm"
         onclick={handleUpgrade}
         aria-label="Upgrade ThetaData subscription to access {dataset.title}"
       >
@@ -144,6 +146,28 @@
 </article>
 
 <style>
+
+  /* Block-link pattern: the card is a plain container, the title button
+     stretches over it to carry the primary click, and the action row
+     sits above that overlay. Keyboard and screen readers get one real
+     control instead of a role="button" wrapper around nested buttons,
+     which is invalid. */
+  .card-open {
+    all: unset;
+    cursor: pointer;
+    display: block;
+  }
+  .card-open::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+  }
+  .card-open:focus-visible::after {
+    box-shadow: var(--shadow-glow-accent);
+  }
+  .card-actions { position: relative; z-index: 1; }
+
   .card {
     /* Fixed width AND height so every shelf tile aligns. The body grows
        within these bounds; long subtitles wrap to two lines max. */
@@ -173,7 +197,7 @@
     transform: translateY(-1px);
   }
 
-  .card:focus-visible {
+  .card:has(.card-open:focus-visible) {
     box-shadow: var(--shadow-glow-accent);
     border-color: var(--accent);
   }
@@ -200,7 +224,7 @@
   /* Don't dim the locked indicator or the upgrade CTA — those are the
      actionable bits we want loud. */
   .card.gated :global(.tier-lock),
-  .card.gated :global(.btn-upgrade) {
+  .card.gated :global(.btn-sm) {
     opacity: 1;
     filter: none;
   }
@@ -255,6 +279,7 @@
     /* Clamp to two lines so cards never grow past the fixed height. */
     display: -webkit-box;
     -webkit-line-clamp: 2;
+    line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -299,7 +324,7 @@
     color: var(--accent-hi);
     font-size: var(--text-body-sm);
     font-weight: var(--weight-medium);
-    border: 1px solid rgba(124, 140, 255, 0.2);
+    border: 1px solid var(--accent-ring);
     cursor: default;
   }
 
@@ -322,9 +347,9 @@
     gap: 3px;
     padding: 2px 6px;
     border-radius: 999px;
-    background: rgba(244, 196, 48, 0.14);
-    color: rgb(212, 158, 0);
-    border: 1px solid rgba(244, 196, 48, 0.32);
+    background: var(--warn-tint);
+    color: var(--warn);
+    border: 1px solid var(--warn-tint);
     font-size: 10px;
     font-weight: 600;
     letter-spacing: 0.04em;
@@ -332,24 +357,6 @@
   }
 
   /* Upgrade CTA replaces the Queue button when verdict.allowed=false. */
-  .btn-upgrade {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    height: 28px;
-    padding: 0 var(--sp-3);
-    border-radius: var(--r-sm);
-    border: 1px solid var(--accent, rgb(56, 132, 255));
-    background: var(--accent, rgb(56, 132, 255));
-    color: white;
-    font-size: var(--text-body-sm);
-    font-weight: var(--weight-semi);
-    cursor: pointer;
-    transition: filter var(--dur-fast) var(--ease-standard);
-  }
-  .btn-upgrade:hover { filter: brightness(1.08); }
-  .btn-upgrade:active { filter: brightness(0.95); }
   @media (prefers-reduced-motion: reduce) {
-    .btn-upgrade { transition: none; }
   }
 </style>

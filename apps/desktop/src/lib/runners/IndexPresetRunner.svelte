@@ -6,7 +6,7 @@
    * date) pair.
    */
   import { X, Loader2, Layers, ChevronRight } from "lucide-svelte";
-  import { app, closeIndexPreset, log } from "$lib/stores/app.svelte";
+  import { app, closeIndexPreset, log, refreshQueueSnapshot } from "$lib/stores/app.svelte";
   import { api, TAURI_AVAILABLE } from "$lib/api";
 
   let symbols = $state<string[]>([]);
@@ -67,7 +67,7 @@
           start: start || null,
           end: end || null,
           date: !end ? (start || null) : null,
-          interval: "0",
+          interval: "tick",
           expiration: "*",
           strike: "*",
           right: "both",
@@ -77,6 +77,7 @@
         if (!firstErr) firstErr = e instanceof Error ? e.message : String(e);
       }
     }
+    await refreshQueueSnapshot();
     busy = false;
     if (firstErr && total === 0) {
       msg = firstErr;
@@ -92,7 +93,8 @@
 {#if app.presetOpen && app.presetSelected}
   <div class="backdrop" onclick={closeIndexPreset} role="presentation">
     <div class="card" onclick={(e) => e.stopPropagation()}
-         role="dialog" aria-modal="true" tabindex="-1">
+         role="dialog" aria-modal="true" tabindex="-1"
+         onkeydown={(e) => e.key === "Escape" && closeIndexPreset()}>
       <header class="head">
         <div>
           <span class="text-caption">Bulk queue · index ecosystem</span>
@@ -178,7 +180,7 @@
 <style>
   .backdrop {
     position: fixed; inset: 0;
-    background: rgba(8,11,18,0.55);
+    background: var(--scrim);
     backdrop-filter: blur(4px);
     display: flex; align-items: center; justify-content: center;
     z-index: 90;

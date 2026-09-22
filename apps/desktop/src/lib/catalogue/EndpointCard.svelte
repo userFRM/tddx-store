@@ -22,24 +22,25 @@
   }
 </script>
 
-<article class="endpoint-card" onclick={open} role="button" tabindex="0"
-         onkeydown={(e) => e.key === "Enter" && open()}>
+<article class="endpoint-card">
   <div class="head">
     <span class="cat-pill">{endpoint.category}</span>
     <span class="sub-pill">{cadence}</span>
   </div>
 
   <div class="body">
-    <h3 class="ep-name text-mono">{endpoint.name}</h3>
+    <h3 class="ep-name text-figures">
+      <button type="button" class="card-open" onclick={open}>{endpoint.name}</button>
+    </h3>
     <p class="ep-desc">{endpoint.description.split(".")[0]}.</p>
   </div>
 
   <div class="foot">
     <div class="required text-caption">
       <span class="req-key">Required:</span>
-      <span class="req-vals text-mono">{required}</span>
+      <span class="req-vals text-figures">{required}</span>
     </div>
-    <button class="run-btn" onclick={(e) => { e.stopPropagation(); open(); }}>
+    <button class="run-btn" onclick={open}>
       <Play size={11} fill="currentColor" />
       Run
     </button>
@@ -47,7 +48,30 @@
 </article>
 
 <style>
+
+  /* Block-link pattern: the card is a plain container, the title button
+     stretches over it to carry the primary click, and the action row
+     sits above that overlay. Keyboard and screen readers get one real
+     control instead of a role="button" wrapper around nested buttons,
+     which is invalid. */
+  .card-open {
+    all: unset;
+    cursor: pointer;
+    display: block;
+    font: inherit;
+    color: inherit;
+  }
+  .card-open::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+  }
+  .card-open:focus-visible::after { box-shadow: var(--shadow-glow-accent); }
+  .foot { position: relative; z-index: 1; }
+
   .endpoint-card {
+    position: relative;
     background: var(--surface-1);
     border: 1px solid var(--border);
     border-radius: var(--r-md);
@@ -67,7 +91,7 @@
     border-color: var(--border-strong);
     transform: translateY(-1px);
   }
-  .endpoint-card:focus-visible {
+  .endpoint-card:has(.card-open:focus-visible) {
     border-color: var(--accent);
     box-shadow: var(--shadow-glow-accent);
   }
@@ -157,6 +181,6 @@
   .run-btn:hover {
     background: var(--accent-tint);
     color: var(--accent-hi);
-    border-color: rgba(124,140,255,0.3);
+    border-color: var(--accent-ring);
   }
 </style>

@@ -145,7 +145,7 @@ async fn main() -> anyhow::Result<()> {
             };
             for d in dates {
                 let spec = DataSpec {
-                    kind,
+                    kind: kind.clone(),
                     symbol: symbol.clone(),
                     date: d,
                     interval: interval.clone(),
@@ -153,6 +153,7 @@ async fn main() -> anyhow::Result<()> {
                     strike: strike.clone(),
                     right: right.clone(),
                     transforms: Default::default(),
+                    extra: Default::default(),
                 };
                 let id = queue
                     .enqueue(spec, format, &cli.out.to_string_lossy(), priority)
@@ -250,8 +251,8 @@ async fn main() -> anyhow::Result<()> {
             let cov = coverage::scan(&cli.out)?;
             let kind_filter = kind.as_deref().and_then(DataKind::parse);
             for c in cov {
-                if let Some(k) = kind_filter {
-                    if c.kind != k {
+                if let Some(k) = &kind_filter {
+                    if c.kind != *k {
                         continue;
                     }
                 }

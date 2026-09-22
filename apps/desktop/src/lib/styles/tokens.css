@@ -1,51 +1,169 @@
 /* ============================================================
-   TdDx Store Design Tokens
-   Generated from DESIGN.md YAML — do not hard-code values
-   in components. Reference var(--token-name) only.
+   TdDx Store design tokens.
+
+   Values come from the ThetaData UI foundations sheet (board F01,
+   "Precision Catalog / UI foundations v1"): brand blue #1074FF for
+   identity, action blue #0063CC for links and filled buttons, text
+   #323348, brand gray #525252, canvas #FAFAFA, surface #FFFFFF,
+   divider #E0E0E0, Inter for UI and IBM Plex Mono for code, a 4px
+   spacing base, 6px input / 8px card radii, and restrained 150ms
+   transitions.
+
+   Light is the default because the brand is. The dark theme is this
+   app's own addition for long sessions in front of a tape; it derives
+   its palette from the brand's own logo gradient rather than inventing
+   one, and is documented at the bottom of this file.
+
+   Reference var(--token-name) in components. Do not hard-code values.
    ============================================================ */
 
 :root {
+  /* ── Brand ───────────────────────────────────────────────── */
+  /* Identity blue. Logo, active indicators, focus rings. Never
+     re-mixed per theme — it is the one fixed point. */
+  --brand-blue:     #1074FF;
+
   /* ── Colors ─────────────────────────────────────────────── */
-  --bg:             #0B0E14;
-  --surface-1:      #11151D;
-  --surface-2:      #161B25;
-  --surface-3:      #1E2430;
-  --border:         #222936;
-  --border-strong:  #2A3242;
+  --bg:             #FAFAFA;   /* Canvas */
+  --surface-1:      #FFFFFF;   /* Cards, sidebars */
+  --surface-2:      #F4F5F7;   /* Hover, raised cards */
+  --surface-3:      #EDEFF3;   /* Modals, popovers */
+  --border:         #E0E0E0;   /* Divider */
+  --border-strong:  #C9CDD4;
 
-  --fg:             #E6EAF2;
-  --fg-muted:       #9AA3B2;
-  --fg-subtle:      #5C6577;
+  --fg:             #323348;   /* Text */
+  --fg-muted:       #525252;   /* Brand gray */
+  --fg-subtle:      #8A8D9B;
 
-  --accent:         #7C8CFF;
-  --accent-hi:      #9AA8FF;
-  --accent-lo:      #5868D9;
-  --accent-tint:    rgba(124, 140, 255, 0.12);
+  /* Action blue and its states. Hover and pressed darken, per the
+     brand sheet — on a light canvas a lighter hover reads as disabled. */
+  --accent:         #0063CC;
+  --accent-hi:      #0052A8;
+  --accent-lo:      #004387;
+  --accent-tint:    rgba(16, 116, 255, 0.10);
 
-  --good:           #5DD4A0;
-  --warn:           #F5C56F;
-  --bad:            #FF7E7E;
-  --data-bull:      #34D399;
-  --data-bear:      #F87171;
+  /* A filled surface and the ink that sits on it are a different job
+     from a link. One token cannot serve both: a blue light enough to
+     read as text on the canvas is too light to carry white text, and
+     vice versa. These are the fill side.
+
+     The ramp runs the brand blue into indigo-violet, on a diagonal.
+     Both ends are chosen so white clears 4.5:1 across the whole sweep,
+     measured: 5.46 at the blue end, 7.10 at the midpoint, 7.91 at the
+     violet end. A flat fill was here before and read as a slab. */
+  --accent-fill:      linear-gradient(135deg, #0B63DD 0%, #5B23D6 100%);
+  --accent-fill-hi:   linear-gradient(135deg, #0D6FF0 0%, #6B2BEC 100%);
+  --accent-fill-solid: #2F45D8;
+  /* A top edge and a coloured drop, so a filled control reads as lit
+     rather than printed. */
+  --accent-fill-edge:  inset 0 1px 0 rgba(255, 255, 255, 0.20);
+  --accent-fill-glow:  0 4px 14px rgba(91, 35, 214, 0.28);
+
+  /* The logo's own gradient. Identity only — active indicators, progress
+     fills, decorative rules. Never behind text: at the cyan end, white
+     falls to 1.8:1. */
+  --brand-gradient: linear-gradient(90deg, #1074FF 0%, #00D4FF 100%);
+
+  /* The wordmark's second half. Matches the brand asset exactly. */
+  --wordmark-ink:   #525252;
+
+  --good:           #1F7A4D;
+  --warn:           #8A6100;
+  --bad:            #C0392B;
+  --data-bull:      #0F8A55;
+  --data-bear:      #C0392B;
+
+  /* ── Tints and rings ────────────────────────────────────── */
+  /* Every washed background and hairline a status or accent surface
+     needs. Components reference these instead of mixing their own
+     rgba(), which is how the palette stayed dark-only for so long. */
+  --accent-tint-weak:   rgba(16, 116, 255, 0.04);
+  --accent-tint-strong: rgba(16, 116, 255, 0.16);
+  --accent-ring:        rgba(16, 116, 255, 0.32);
+
+  --neutral-tint:   rgba(50, 51, 72, 0.07);
+
+  --good-tint:      rgba(31, 122, 77, 0.10);
+  --good-ring:      rgba(31, 122, 77, 0.28);
+  --warn-tint:      rgba(212, 158, 0, 0.13);
+  --warn-ring:      rgba(212, 158, 0, 0.32);
+  --bad-tint:       rgba(192, 57, 43, 0.09);
+  --bad-ring:       rgba(192, 57, 43, 0.28);
+
+  /* Foreground on a filled accent surface, and the veil used to lift a
+     selected element that already sits on one. */
+  --on-accent:      #FFFFFF;
+  --on-accent-veil: rgba(255, 255, 255, 0.22);
+
+  /* Modal / palette scrim. */
+  --scrim:          rgba(50, 51, 72, 0.32);
+
+  /* ── Subscription tiers ─────────────────────────────────── */
+  /* A ladder, so it reads as one: the same blue gaining weight, from a
+     grey chip to a filled one. No second hue enters the palette.
+     
+     Two earlier attempts proved the point. neutral/blue/green/amber
+     was four unrelated hues that did not read as an order and fought
+     the status colours — an amber Pro badge says "warning" and a green
+     Standard badge says "success", when neither is either. Swapping
+     amber for the logo's cyan was no better: cyan sits next to blue on
+     the wheel, so the two muddied each other instead of ranking.
+     
+     Weight is the axis that actually encodes rank, and it costs no
+     colour. */
+  --tier-free-bg:         var(--neutral-tint);
+  --tier-free-fg:         var(--fg-muted);
+  --tier-free-border:     transparent;
+  --tier-value-bg:        rgba(16, 116, 255, 0.06);
+  --tier-value-fg:        #5A7FA8;
+  --tier-value-border:    rgba(16, 116, 255, 0.14);
+  --tier-standard-bg:     rgba(16, 116, 255, 0.12);
+  --tier-standard-fg:     #0063CC;
+  --tier-standard-border: rgba(16, 116, 255, 0.28);
+  /* Pro is the only filled chip. That is the whole signal. */
+  --tier-pro-bg:          var(--accent-fill);
+  --tier-pro-fg:          var(--on-accent);
+  --tier-pro-border:      transparent;
 
   /* ── Typography ─────────────────────────────────────────── */
-  --font-ui:        "Inter", system-ui, -apple-system, sans-serif;
-  --font-display:   "Inter Display", "Inter", system-ui, sans-serif;
-  --font-mono:      "JetBrains Mono", "SF Mono", Consolas, ui-monospace, monospace;
+  --font-ui:        "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display:   "Inter", system-ui, -apple-system, sans-serif;
+  /* The platform's own modern mono — SF Mono on macOS, Cascadia on
+     Windows, whatever the desktop ships on Linux. The brand sheet names
+     IBM Plex Mono, but that is a slab face built for print and it reads
+     as a typewriter on screen. `ui-monospace` also means no webfont to
+     download and no flash of fallback text. */
+  /* Named faces first, because the generic `monospace` keyword resolves
+     to Courier on macOS and that is what a bare fallback gets you. SF
+     Mono ships with macOS, Cascadia with Windows Terminal, and Menlo is
+     the reliable macOS floor. */
+  --font-mono:      "SF Mono", "SFMono-Regular", ui-monospace, "Cascadia Mono",
+                    "Segoe UI Mono", "Roboto Mono", Menlo, Consolas, monospace;
 
-  --text-display-xl:    2.5rem;
-  --text-display-lg:    1.75rem;
-  --text-heading:       1rem;
-  --text-body:          0.875rem;
-  --text-body-sm:       0.8125rem;
-  --text-caption:       0.6875rem;
-  --text-mono:          0.8125rem;
+  /* Figures that need to line up in a column do not need a monospaced
+     face; they need tabular figures, which Inter has. Using this rather
+     than the mono keeps tables aligned without making a byte count look
+     like terminal output. */
+  --font-numeric:   var(--font-ui);
+
+  /* The brand type scale is sized for a marketing page (48/32/24/16).
+     A downloader is a dense working surface, so the scale below keeps
+     the brand's ratios and weights at a tighter base: body 14px, not
+     16px. Tabular data at 16px costs a column per screen. */
+  --text-display-xl:    2rem;        /* 32px */
+  --text-display-lg:    1.5rem;      /* 24px */
+  --text-heading:       1rem;        /* 16px */
+  --text-body:          0.875rem;    /* 14px */
+  --text-body-sm:       0.8125rem;   /* 13px */
+  --text-caption:       0.6875rem;   /* 11px */
+  --text-figures:       0.8125rem;   /* 13px */
 
   --weight-normal:  400;
   --weight-medium:  500;
   --weight-semi:    600;
 
   /* ── Spacing ─────────────────────────────────────────────── */
+  /* Base unit 4px; the scale is the brand's 4 8 12 16 24 32 48 64 96. */
   --sp-1:  4px;
   --sp-2:  8px;
   --sp-3:  12px;
@@ -56,25 +174,30 @@
   --sp-10: 40px;
   --sp-12: 48px;
   --sp-16: 64px;
+  --sp-24: 96px;
 
   /* ── Radii ───────────────────────────────────────────────── */
   --r-none: 0px;
-  --r-sm:   6px;
-  --r-md:   10px;
-  --r-lg:   14px;
-  --r-xl:   20px;
+  --r-sm:   6px;    /* Inputs */
+  --r-md:   8px;    /* Cards */
+  --r-lg:   12px;
+  --r-xl:   16px;
   --r-pill: 999px;
 
   /* ── Shadows ─────────────────────────────────────────────── */
-  --shadow-flat:         0 0 0 1px rgba(0,0,0,0.2);
-  --shadow-raised:       0 1px 2px rgba(0,0,0,0.4), 0 0 0 1px rgba(0,0,0,0.25);
-  --shadow-modal:        0 24px 64px rgba(0,0,0,0.55), 0 0 0 1px rgba(0,0,0,0.4);
-  --shadow-glow-accent:  0 0 0 4px rgba(124,140,255,0.18);
+  /* Elevation on a light canvas is a hairline plus a short, low-alpha
+     drop. Anything heavier reads as a sticker on white. */
+  --shadow-flat:         0 0 0 1px rgba(50, 51, 72, 0.06);
+  --shadow-raised:       0 1px 2px rgba(50, 51, 72, 0.08),
+                         0 0 0 1px rgba(50, 51, 72, 0.05);
+  --shadow-modal:        0 24px 64px rgba(50, 51, 72, 0.18),
+                         0 0 0 1px rgba(50, 51, 72, 0.08);
+  --shadow-glow-accent:  0 0 0 3px rgba(16, 116, 255, 0.25);
 
   /* ── Motion ─────────────────────────────────────────────── */
   --dur-instant: 60ms;
   --dur-fast:    120ms;
-  --dur-base:    180ms;
+  --dur-base:    150ms;
   --dur-slow:    260ms;
 
   --ease-standard: cubic-bezier(0.2, 0.0, 0.0, 1.0);
@@ -87,45 +210,110 @@
   --rail-w-sm:    64px;
 
   /* ── Icon ────────────────────────────────────────────────── */
+  /* The brand sheet draws icons at 20-24px with a 1.5px stroke. At the
+     14px sizes this app uses, 1.5 is the matching weight. */
   --icon-sm:  14px;
   --icon-md:  16px;
   --icon-lg:  20px;
-  --icon-stroke: 1.75;
+  --icon-stroke: 1.5;
 }
 
 /* ============================================================
-   Light theme. Activated by `<html data-theme="light">`. The
-   accent stays identical so muscle memory transfers; greyscale
-   inverts and the data-bull/bear pair flips to printer-safe
-   variants. Surfaces step UP in lightness instead of down.
+   Dark theme. Activated by `<html data-theme="dark">`.
+
+   The brand sheet is a light document, so there is no dark palette to
+   copy. So it does not try to have one: the same brand blue carries
+   through, lifted for legibility against a dark surface, and emphasis
+   is carried by weight rather than by a second hue.
+
+   Three hues are deliberately absent. Amber is confined to genuine
+   warnings and never badges anything desirable. Cyan was tried and
+   dropped: it sits next to blue on the wheel, so the pair muddies
+   rather than ranks. Violet is out entirely — it is another
+   market-data vendor's identity, and a tool in this category wearing
+   it invites a comparison nobody asked for.
+
+   Surfaces are cool and near-neutral with a slight blue cast, stepping
+   UP in lightness from the canvas — the same nesting rule as light,
+   inverted.
    ============================================================ */
-:root[data-theme="light"] {
-  --bg:             #F6F7F9;
-  --surface-1:      #FFFFFF;
-  --surface-2:      #F2F3F6;
-  --surface-3:      #E9ECF1;
-  --border:         #DFE3EA;
-  --border-strong:  #C8CFD9;
+:root[data-theme="dark"] {
+  --bg:             #0E1117;
+  --surface-1:      #151922;
+  --surface-2:      #1C212C;
+  --surface-3:      #252B38;
+  --border:         #2A3040;
+  --border-strong:  #3A4256;
 
-  --fg:             #14181F;
-  --fg-muted:       #586273;
-  --fg-subtle:      #8A92A1;
+  --fg:             #E9ECF3;
+  --fg-muted:       #A6AEBF;
+  --fg-subtle:      #6C7488;
 
-  --accent:         #4253E2;
-  --accent-hi:      #5969F0;
-  --accent-lo:      #2F3FC9;
-  --accent-tint:    rgba(66, 83, 226, 0.1);
+  /* #4D9BFF was here and read washed out, because it was picked to
+     clear 4.5:1 as text AND used as a button fill, where white on it
+     manages only 2.8:1. Splitting the jobs lets the text colour stay
+     saturated: #2E86FF is 5.4:1 on the canvas. */
+  --accent:         #2E86FF;
+  --accent-hi:      #5BA3FF;
+  --accent-lo:      #1074FF;
+  --accent-tint:    rgba(46, 134, 255, 0.14);
 
-  --good:           #1F9F66;
-  --warn:           #B07A0E;
-  --bad:            #C73E3E;
-  --data-bull:      #109A5C;
-  --data-bear:      #C72F3A;
+  /* Same ramp as light; it already clears white contrast at both ends
+     and needs no separate dark variant. */
+  --accent-fill:      linear-gradient(135deg, #0B63DD 0%, #5B23D6 100%);
+  --accent-fill-hi:   linear-gradient(135deg, #1272F0 0%, #6B2BEC 100%);
+  --accent-fill-solid: #2F45D8;
+  --accent-fill-edge:  inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  --accent-fill-glow:  0 4px 18px rgba(91, 35, 214, 0.40);
 
-  --shadow-flat:         0 0 0 1px rgba(20, 24, 31, 0.06);
-  --shadow-raised:       0 1px 2px rgba(20, 24, 31, 0.08),
-                         0 0 0 1px rgba(20, 24, 31, 0.04);
-  --shadow-modal:        0 24px 64px rgba(20, 24, 31, 0.18),
-                         0 0 0 1px rgba(20, 24, 31, 0.06);
-  --shadow-glow-accent:  0 0 0 4px rgba(66, 83, 226, 0.16);
+  --brand-gradient: linear-gradient(90deg, #1074FF 0%, #00D4FF 100%);
+
+  /* The dark variant of the brand asset uses #a0a0a0 for "data". */
+  --wordmark-ink:   #A0A0A0;
+
+  --good:           #4ECB8C;
+  --warn:           #D9A441;
+  --bad:            #FF7A6B;
+  --data-bull:      #34D399;
+  --data-bear:      #F87171;
+
+  --accent-tint:        rgba(77, 155, 255, 0.14);
+  --accent-tint-weak:   rgba(46, 134, 255, 0.05);
+  --accent-tint-strong: rgba(46, 134, 255, 0.22);
+  --accent-ring:        rgba(46, 134, 255, 0.36);
+
+  --neutral-tint:   rgba(232, 234, 240, 0.09);
+
+  --good-tint:      rgba(78, 203, 140, 0.14);
+  --good-ring:      rgba(78, 203, 140, 0.30);
+  --warn-tint:      rgba(229, 178, 76, 0.14);
+  --warn-ring:      rgba(229, 178, 76, 0.32);
+  --bad-tint:       rgba(255, 122, 107, 0.13);
+  --bad-ring:       rgba(255, 122, 107, 0.30);
+
+  --on-accent:      #FFFFFF;
+  --on-accent-veil: rgba(255, 255, 255, 0.20);
+
+  --scrim:          rgba(8, 11, 18, 0.55);
+
+  /* The same ladder as light: one blue gaining weight, Pro filled. */
+  --tier-free-bg:         var(--neutral-tint);
+  --tier-free-fg:         var(--fg-muted);
+  --tier-free-border:     transparent;
+  --tier-value-bg:        rgba(46, 134, 255, 0.07);
+  --tier-value-fg:        #8FA6C4;
+  --tier-value-border:    rgba(46, 134, 255, 0.16);
+  --tier-standard-bg:     rgba(46, 134, 255, 0.16);
+  --tier-standard-fg:     #5BA3FF;
+  --tier-standard-border: rgba(46, 134, 255, 0.30);
+  --tier-pro-bg:          var(--accent-fill);
+  --tier-pro-fg:          #FFFFFF;
+  --tier-pro-border:      transparent;
+
+  --shadow-flat:         0 0 0 1px rgba(0, 0, 0, 0.25);
+  --shadow-raised:       0 1px 2px rgba(0, 0, 0, 0.45),
+                         0 0 0 1px rgba(0, 0, 0, 0.3);
+  --shadow-modal:        0 24px 64px rgba(0, 0, 0, 0.6),
+                         0 0 0 1px rgba(0, 0, 0, 0.45);
+  --shadow-glow-accent:  0 0 0 3px rgba(46, 134, 255, 0.34);
 }

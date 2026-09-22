@@ -7,8 +7,10 @@ fn main() {
     let lock_path = workspace_root.join("Cargo.lock");
     println!("cargo:rerun-if-changed={}", lock_path.display());
 
-    emit_locked_version(&lock_path, "thetadatadx", "TDDS_THETADATADX_VERSION");
-    emit_locked_version(&lock_path, "tdbe", "TDDS_TDBE_VERSION");
+    // The SDK ships as one crate: `thetadatadx-rs`, whose lib target is
+    // `thetadatadx`. The separate `tdbe` data-format crate was folded into
+    // it and no longer resolves.
+    emit_locked_version(&lock_path, "thetadatadx-rs", "TDDS_THETADATADX_VERSION");
 
     tauri_build::build()
 }

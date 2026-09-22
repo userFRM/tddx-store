@@ -8,37 +8,230 @@
     Plus,
     ArrowRight,
     Library,
+    Diff,
+    Database,
   } from "lucide-svelte";
+  import { revealItemInDir } from "@tauri-apps/plugin-opener";
+  import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import { api, fmtBytes, fmtNum, type Coverage } from "$lib/api";
-  import { app, navigate } from "$lib/stores/app.svelte";
+  import { app, navigate, log, refreshQueueSnapshot, browseTo, loadCoverage } from "$lib/stores/app.svelte";
   import { onMount } from "svelte";
+  import CoverageDiff from "$lib/queue/CoverageDiff.svelte";
 
-  let coverage = $state<Coverage[]>([]);
-  let loading = $state(true);
+  type SortKey = "symbol" | "size" | "files" | "recent";
+
+  const SORT_LABELS: Record<SortKey, string> = {
+    symbol: "Symbol A-Z",
+    size: "Largest first",
+    files: "Most files",
+    recent: "Most recent",
+  };
+
+  const coverage = $derived(app.coverage);
+  const loading = $derived(app.coverageLoading && app.coverage.length === 0);
+  let rowMsg = $state("");
+  let sortKey = $state<SortKey>("symbol");
+  let busy = $state(false);
+
+  /** Queue every trading day missing from a set's own span. */
+  async function refillGaps(row: Coverage) {
+    // The count is now queued work, so the panel's copy of it is stale.
+    const key = gapKey(row);
+    const { [key]: _dropped, ...rest } = gaps;
+    gaps = rest;
+    openGaps = new Set([...openGaps].filter((k) => k !== key));
+    rowMsg = `Checking ${row.symbol} ${row.kind}…`;
+    try {
+      const n = await api.requeueMissingDates(row.kind, row.symbol);
+      await refreshQueueSnapshot();
+      rowMsg =
+        n === 0
+          ? `${row.symbol} ${row.kind} has no gaps`
+          : `Queued ${n} missing day${n === 1 ? "" : "s"} for ${row.symbol}`;
+      log("info", rowMsg);
+    } catch (e: unknown) {
+      rowMsg = e instanceof Error ? e.message : String(e);
+      log("error", `Refill failed: ${rowMsg}`);
+    }
+    setTimeout(() => (rowMsg = ""), 3000);
+  }
+
+  /** Copy a DuckDB bootstrap script that exposes every dataset on disk
+   *  as a queryable view. A downloader whose output cannot be opened is
+   *  half a tool; this is the shortest path from "downloaded" to
+   *  "queried" without the app growing a SQL console. */
+  async function copyDuckDbScript() {
+    busy = true;
+    try {
+      const { sql } = await api.duckdbCommand(app.settings.output_dir);
+      await writeText(sql);
+      rowMsg = "DuckDB script copied — paste it into a duckdb session";
+      log("info", rowMsg);
+    } catch (e: unknown) {
+      rowMsg = e instanceof Error ? e.message : String(e);
+      log("error", `DuckDB export failed: ${rowMsg}`);
+    } finally {
+      busy = false;
+      setTimeout(() => (rowMsg = ""), 4000);
+    }
+  }
+
+  /** Reveal the dataset's directory in the OS file manager. */
+  async function revealKindDir(row: Coverage) {
+    try {
+      await revealItemInDir(`${app.settings.output_dir}/${row.kind}`);
+    } catch (e: unknown) {
+      rowMsg = e instanceof Error ? e.message : String(e);
+      setTimeout(() => (rowMsg = ""), 3000);
+    }
+  }
+  /** "What landed since I last looked" — a snapshot diff over the
+   *  same coverage rows, opened on demand so it costs nothing when
+   *  closed. */
+  let showDiff = $state(false);
   let filterQuery = $state("");
   let expandedSymbols = $state<Set<string>>(new Set());
 
-  onMount(async () => {
-    try {
-      coverage = await api.coverage();
-    } catch {
-      // not connected
-    } finally {
-      loading = false;
-    }
-  });
+  // Shared with Home, and invalidated by the queue poll when a task
+  // finishes, so the numbers here do not go stale behind a download.
+  onMount(() => void loadCoverage());
 
-  // Group coverage by symbol
-  const grouped = $derived(() => {
-    const q = filterQuery.trim().toUpperCase();
+  // Group by symbol, filtering on the symbol AND the dataset, because
+  // "show me everything with greeks" is as common a question as
+  // "show me everything for QQQ".
+  const grouped = $derived.by<[string, Coverage[]][]>(() => {
+    const q = filterQuery.trim().toLowerCase();
     const map = new Map<string, Coverage[]>();
     for (const row of coverage) {
-      if (q && !row.symbol.toUpperCase().includes(q)) continue;
+      if (
+        q &&
+        !row.symbol.toLowerCase().includes(q) &&
+        !row.kind.toLowerCase().includes(q) &&
+        !kindLabel(row.kind).toLowerCase().includes(q)
+      ) {
+        continue;
+      }
       if (!map.has(row.symbol)) map.set(row.symbol, []);
       map.get(row.symbol)!.push(row);
     }
-    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    const groups = Array.from(map.entries());
+    groups.sort(([aSym, aRows], [bSym, bRows]) => {
+      switch (sortKey) {
+        case "size":
+          return symbolTotalBytes(bRows) - symbolTotalBytes(aRows);
+        case "files":
+          return symbolTotalFiles(bRows) - symbolTotalFiles(aRows);
+        case "recent":
+          return (lastDate(bRows) ?? "").localeCompare(lastDate(aRows) ?? "");
+        default:
+          return aSym.localeCompare(bSym);
+      }
+    });
+    return groups;
   });
+
+  const allExpanded = $derived(
+    grouped.length > 0 && grouped.every(([sym]) => expandedSymbols.has(sym)),
+  );
+
+  function toggleAll() {
+    expandedSymbols = allExpanded
+      ? new Set()
+      : new Set(grouped.map(([sym]) => sym));
+  }
+
+  function lastDate(rows: Coverage[]): string | null {
+    return rows.map((r) => r.last).filter(Boolean).sort().pop() ?? null;
+  }
+
+  /** Per-row gap state, keyed `kind|symbol`. Absent until the user
+   *  asks: the answer needs the vendor's trading calendar, so it is a
+   *  network call, not something to fire for every visible row. */
+  type GapState =
+    | { status: "loading" }
+    | { status: "error"; message: string }
+    | { status: "ready"; dates: string[] };
+  let gaps = $state<Record<string, GapState>>({});
+  let openGaps = $state<Set<string>>(new Set());
+
+  const gapKey = (row: Coverage) => `${row.kind}|${row.symbol}`;
+
+  /** Collapse a date list into contiguous runs, so 33 scattered days
+   *  read as a handful of ranges instead of a wall of dates. */
+  function toRanges(dates: string[]): { from: string; to: string; days: number }[] {
+    const out: { from: string; to: string; days: number }[] = [];
+    for (const date of dates) {
+      const prev = out[out.length - 1];
+      const dayAfter = prev
+        ? new Date(new Date(prev.to + "T00:00:00Z").getTime() + 86_400_000)
+            .toISOString()
+            .slice(0, 10)
+        : null;
+      // Runs join across a weekend, since Saturday and Sunday are not
+      // gaps and would otherwise split every week into its own range.
+      const within = prev && date > prev.to && date <= addDays(prev.to, 3);
+      if (prev && (date === dayAfter || within)) {
+        prev.to = date;
+        prev.days += 1;
+      } else {
+        out.push({ from: date, to: date, days: 1 });
+      }
+    }
+    return out;
+  }
+
+  function addDays(iso: string, n: number): string {
+    return new Date(new Date(iso + "T00:00:00Z").getTime() + n * 86_400_000)
+      .toISOString()
+      .slice(0, 10);
+  }
+
+  async function toggleGaps(row: Coverage) {
+    const key = gapKey(row);
+    const next = new Set(openGaps);
+    if (next.has(key)) {
+      next.delete(key);
+      openGaps = next;
+      return;
+    }
+    next.add(key);
+    openGaps = next;
+    if (gaps[key]?.status === "ready") return;
+    gaps = { ...gaps, [key]: { status: "loading" } };
+    try {
+      const dates = await api.missingDates(row.kind, row.symbol);
+      gaps = { ...gaps, [key]: { status: "ready", dates } };
+    } catch (e: unknown) {
+      gaps = {
+        ...gaps,
+        [key]: { status: "error", message: e instanceof Error ? e.message : String(e) },
+      };
+    }
+  }
+
+  /** Fill gaps across every dataset held for one symbol. */
+  async function refillSymbol(symbol: string, rows: Coverage[]) {
+    if (busy) return;
+    busy = true;
+    rowMsg = `Checking ${symbol}…`;
+    try {
+      let queued = 0;
+      for (const row of rows) {
+        queued += await api.requeueMissingDates(row.kind, row.symbol);
+      }
+      rowMsg =
+        queued === 0
+          ? `${symbol} has no gaps`
+          : `Queued ${queued} missing day${queued === 1 ? "" : "s"} for ${symbol}`;
+      log("info", rowMsg);
+    } catch (e: unknown) {
+      rowMsg = e instanceof Error ? e.message : String(e);
+      log("error", `Refill failed: ${rowMsg}`);
+    } finally {
+      busy = false;
+      setTimeout(() => (rowMsg = ""), 3000);
+    }
+  }
 
   function toggleSymbol(symbol: string) {
     const s = new Set(expandedSymbols);
@@ -74,16 +267,16 @@
   // Show catalogue entries that have no coverage rows
   const downloadedKinds = $derived(new Set(coverage.map((r) => r.kind)));
 
-  const neverDownloaded = $derived(() => {
+  const neverDownloaded = $derived.by(() => {
     if (app.catalogue.length === 0) return [];
     return app.catalogue.filter((e) => !downloadedKinds.has(e.name));
   });
 
   // Group never-downloaded by category
-  const neverByCategory = $derived(() => {
+  const neverByCategory = $derived.by(() => {
     const order: string[] = [];
     const map = new Map<string, typeof app.catalogue>();
-    for (const e of neverDownloaded()) {
+    for (const e of neverDownloaded) {
       const cat = e.category.charAt(0).toUpperCase() + e.category.slice(1);
       if (!map.has(cat)) { map.set(cat, []); order.push(cat); }
       map.get(cat)!.push(e);
@@ -92,11 +285,6 @@
   });
 
   let neverOpen = $state(false);
-
-  function browseTo(operationId: string) {
-    // Navigate to browse — the user will select the kind manually for now
-    navigate("browse");
-  }
 
   // First sentence of description
   function firstSentence(desc: string): string {
@@ -112,23 +300,71 @@
     <div class="header-left">
       <h1 class="lib-title">Library</h1>
       {#if coverage.length > 0}
-        <span class="lib-meta text-mono fg-muted">
-          {grouped().length} symbols · {fmtBytes(coverage.reduce((s, r) => s + r.bytes, 0))} total
+        <span class="lib-meta text-figures fg-muted">
+          {grouped.length} {grouped.length === 1 ? "symbol" : "symbols"} · {fmtBytes(coverage.reduce((s, r) => s + r.bytes, 0))} total
         </span>
       {/if}
     </div>
 
-    <div class="search-wrap">
-      <Search size={14} strokeWidth={1.75} class="search-icon" aria-hidden="true" />
-      <input
-        class="search-input"
-        type="search"
-        placeholder="Filter symbol…"
-        bind:value={filterQuery}
-        aria-label="Filter by symbol"
-      />
+    {#if rowMsg}
+      <span class="row-msg text-body-sm" role="status">{rowMsg}</span>
+    {/if}
+
+    <div class="header-controls">
+      {#if grouped.length > 0}
+        <button class="btn btn-ghost" onclick={toggleAll}>
+          {allExpanded ? "Collapse all" : "Expand all"}
+        </button>
+      {/if}
+
+      {#if coverage.length > 0}
+        <button
+          class="btn btn-ghost"
+          onclick={copyDuckDbScript}
+          disabled={busy}
+          title="Copy a DuckDB script that views every dataset on disk"
+        >
+          <Database size={14} strokeWidth={1.75} aria-hidden="true" />
+          DuckDB
+        </button>
+      {/if}
+
+      <button
+        class="btn btn-ghost"
+        class:active={showDiff}
+        onclick={() => (showDiff = !showDiff)}
+        aria-pressed={showDiff}
+        title="Compare the library against a saved snapshot"
+      >
+        <Diff size={14} strokeWidth={1.75} aria-hidden="true" />
+        Changes
+      </button>
+
+      <label class="sort-control">
+        <span class="sr-only">Sort by</span>
+        <select class="sort-select" bind:value={sortKey} aria-label="Sort by">
+          {#each Object.entries(SORT_LABELS) as [key, label]}
+            <option value={key}>{label}</option>
+          {/each}
+        </select>
+      </label>
+
+      <div class="search-wrap">
+        <Search size={14} strokeWidth={1.75} class="search-icon" aria-hidden="true" />
+        <input
+          class="search-input"
+          type="search"
+          placeholder="Filter symbol or dataset…"
+          bind:value={filterQuery}
+          aria-label="Filter by symbol or dataset"
+        />
+      </div>
     </div>
   </div>
+
+  {#if showDiff}
+    <div class="diff-panel"><CoverageDiff /></div>
+  {/if}
 
   <!-- Content -->
   <div class="lib-body">
@@ -137,7 +373,7 @@
         <div class="spinner" aria-label="Loading library"></div>
         <span class="text-body-sm fg-muted">Loading library…</span>
       </div>
-    {:else if grouped().length === 0 && !filterQuery}
+    {:else if grouped.length === 0 && !filterQuery}
       <div class="empty-state">
         <div class="empty-icon" aria-hidden="true">
           <Library size={40} strokeWidth={1.25} />
@@ -155,9 +391,9 @@
       </div>
     {:else}
       <!-- Downloaded symbol list -->
-      {#if grouped().length > 0}
+      {#if grouped.length > 0}
         <div class="symbol-list" role="list">
-          {#each grouped() as [symbol, rows] (symbol)}
+          {#each grouped as [symbol, rows] (symbol)}
             {@const expanded = expandedSymbols.has(symbol)}
             <div class="symbol-group" role="listitem">
               <button
@@ -173,15 +409,29 @@
                     <ChevronRight size={14} strokeWidth={1.75} />
                   {/if}
                 </div>
-                <span class="symbol-ticker text-mono">{symbol}</span>
+                <span class="symbol-ticker text-figures">{symbol}</span>
                 <div class="symbol-summary">
-                  <span class="sum-stat text-mono">{fmtNum(symbolTotalFiles(rows))} files</span>
+                  <span class="sum-stat text-figures">{fmtNum(rows.length)} {rows.length === 1 ? "dataset" : "datasets"}</span>
                   <span class="sum-sep">·</span>
-                  <span class="sum-stat text-mono">{fmtBytes(symbolTotalBytes(rows))}</span>
+                  <span class="sum-stat text-figures">{fmtNum(symbolTotalFiles(rows))} files</span>
                   <span class="sum-sep">·</span>
-                  <span class="sum-stat text-mono">{symbolSpan(rows)}</span>
+                  <span class="sum-stat text-figures">{fmtBytes(symbolTotalBytes(rows))}</span>
+                  <span class="sum-sep">·</span>
+                  <span class="sum-stat text-figures">{symbolSpan(rows)}</span>
                 </div>
               </button>
+
+              <div class="symbol-aside">
+                <button
+                  class="btn btn-secondary btn-sm"
+                  onclick={() => refillSymbol(symbol, rows)}
+                  disabled={busy}
+                  title="Check every dataset for {symbol} and queue whatever is missing"
+                >
+                  <RotateCcw size={12} strokeWidth={1.75} />
+                  Fill gaps
+                </button>
+              </div>
 
               {#if expanded}
                 <div class="kind-rows">
@@ -191,17 +441,35 @@
                         <code class="kind-name">{row.kind}</code>
                         <span class="kind-title text-body-sm fg-muted">{kindLabel(row.kind)}</span>
                       </div>
-                      <div class="kind-stats text-mono">
+                      <div class="kind-stats text-figures">
                         <span>{fmtNum(row.files)} files</span>
                         <span class="sum-sep">·</span>
                         <span>{fmtBytes(row.bytes)}</span>
                         <span class="sum-sep">·</span>
+                        <span>{row.format}</span>
+                        <span class="sum-sep">·</span>
                         <span>{row.first ?? "—"} → {row.last ?? "—"}</span>
                       </div>
+                      <button
+                        class="gap-toggle"
+                        class:open={openGaps.has(gapKey(row))}
+                        onclick={() => toggleGaps(row)}
+                        aria-expanded={openGaps.has(gapKey(row))}
+                      >
+                        {#if gaps[gapKey(row)]?.status === "loading"}
+                          Checking…
+                        {:else if gaps[gapKey(row)]?.status === "ready"}
+                          {@const n = (gaps[gapKey(row)] as { dates: string[] }).dates.length}
+                          {n === 0 ? "Complete" : `${fmtNum(n)} missing`}
+                        {:else}
+                          Check gaps
+                        {/if}
+                      </button>
+
                       <div class="kind-actions">
                         <button
                           class="btn-icon"
-                          onclick={() => navigate("browse")}
+                          onclick={() => browseTo(row.kind, symbol)}
                           title="Download more dates"
                           aria-label="Download more dates for {symbol} {row.kind}"
                         >
@@ -209,20 +477,70 @@
                         </button>
                         <button
                           class="btn-icon"
-                          title="Re-run missing dates"
-                          aria-label="Re-run missing dates for {symbol} {row.kind}"
+                          onclick={() => refillGaps(row)}
+                          title="Queue the missing dates in this range"
+                          aria-label="Queue the missing dates for {symbol} {row.kind}"
                         >
                           <RotateCcw size={13} strokeWidth={1.75} />
                         </button>
                         <button
                           class="btn-icon"
-                          title="Open output directory"
-                          aria-label="Open output directory for {symbol} {row.kind}"
+                          onclick={() => revealKindDir(row)}
+                          title="Show the output directory"
+                          aria-label="Show the output directory for {symbol} {row.kind}"
                         >
                           <FolderOpen size={13} strokeWidth={1.75} />
                         </button>
                       </div>
                     </div>
+
+                    {#if openGaps.has(gapKey(row))}
+                      {@const state = gaps[gapKey(row)]}
+                      <div class="gap-panel">
+                        {#if !state || state.status === "loading"}
+                          <span class="gap-note fg-muted text-body-sm">
+                            Asking ThetaData which days it has for {row.symbol}…
+                          </span>
+                        {:else if state.status === "error"}
+                          <span class="gap-note text-body-sm" style="color: var(--bad)">
+                            {state.message}
+                          </span>
+                        {:else if state.dates.length === 0}
+                          <span class="gap-note fg-muted text-body-sm">
+                            Every trading day between {row.first} and {row.last} is on disk.
+                          </span>
+                        {:else}
+                          <div class="gap-head">
+                            <span class="gap-note text-body-sm">
+                              {fmtNum(state.dates.length)} trading
+                              {state.dates.length === 1 ? "day" : "days"} missing between
+                              {row.first} and {row.last}. Market holidays are excluded —
+                              these are days ThetaData has and you do not.
+                            </span>
+                            <button
+                              class="btn btn-primary btn-sm"
+                              disabled={busy}
+                              onclick={() => refillGaps(row)}
+                            >
+                              Queue {fmtNum(state.dates.length)}
+                              {state.dates.length === 1 ? "day" : "days"}
+                            </button>
+                          </div>
+                          <ul class="gap-ranges">
+                            {#each toRanges(state.dates) as range}
+                              <li class="gap-range text-figures">
+                                {#if range.days === 1}
+                                  {range.from}
+                                {:else}
+                                  {range.from} → {range.to}
+                                  <span class="fg-subtle">({range.days})</span>
+                                {/if}
+                              </li>
+                            {/each}
+                          </ul>
+                        {/if}
+                      </div>
+                    {/if}
                   {/each}
                 </div>
               {/if}
@@ -237,7 +555,7 @@
       {/if}
 
       <!-- ── Available datasets not yet on disk ─────────────────── -->
-      {#if !filterQuery && neverDownloaded().length > 0}
+      {#if !filterQuery && neverDownloaded.length > 0}
         <div class="never-section">
           <button
             type="button"
@@ -253,12 +571,12 @@
             <span class="never-toggle-label">
               Available datasets you don't have on disk
             </span>
-            <span class="never-count text-caption tabnum">{neverDownloaded().length}</span>
+            <span class="never-count text-caption tabnum">{neverDownloaded.length}</span>
           </button>
 
           {#if neverOpen}
             <div class="never-body">
-              {#each neverByCategory() as group (group.category)}
+              {#each neverByCategory as group (group.category)}
                 <div class="never-category">
                   <div class="never-cat-label text-caption">{group.category}</div>
                   <div class="never-grid">
@@ -302,6 +620,70 @@
   }
 
   /* Header */
+  .gap-toggle {
+    justify-self: end;
+    padding: 2px var(--sp-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-pill);
+    background: transparent;
+    color: var(--fg-muted);
+    font-size: var(--text-caption);
+    font-family: var(--font-ui);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color var(--dur-fast) var(--ease-standard),
+                color var(--dur-fast) var(--ease-standard);
+  }
+  .gap-toggle:hover, .gap-toggle.open {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .gap-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    padding: var(--sp-3) var(--sp-4);
+    margin: 0 0 var(--sp-2) var(--sp-8);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+  }
+  .gap-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--sp-4);
+  }
+  .gap-note { max-width: 62ch; }
+  .gap-ranges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--sp-1) var(--sp-3);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .gap-range {
+    font-size: var(--text-caption);
+    color: var(--fg-muted);
+  }
+
+  .row-msg {
+    color: var(--fg-muted);
+    margin-left: auto;
+    padding-right: var(--sp-3);
+    white-space: nowrap;
+  }
+
+  .diff-panel {
+    border-bottom: 1px solid var(--border);
+    padding: 0 var(--space-6) var(--space-4);
+  }
+  .btn-ghost.active {
+    color: var(--accent);
+    background: var(--surface-2);
+  }
   .lib-header {
     display: flex;
     align-items: center;
@@ -436,7 +818,7 @@
 
   .kind-row {
     display: grid;
-    grid-template-columns: 1fr auto auto;
+    grid-template-columns: 1fr auto auto auto;
     align-items: center;
     gap: var(--sp-4);
     padding: var(--sp-3) var(--sp-8) var(--sp-3) calc(var(--sp-8) + 80px + var(--sp-3));
@@ -455,7 +837,7 @@
 
   .kind-name {
     font-family: var(--font-mono);
-    font-size: var(--text-mono);
+    font-size: var(--text-figures);
     color: var(--fg-muted);
   }
 
@@ -632,7 +1014,7 @@
     gap: var(--sp-1);
     padding: 3px var(--sp-3);
     background: var(--accent-tint);
-    border: 1px solid rgba(124, 140, 255, 0.25);
+    border: 1px solid var(--accent-tint-strong);
     border-radius: var(--r-sm);
     color: var(--accent-hi);
     font-size: var(--text-caption);
@@ -664,8 +1046,4 @@
   }
 
   .tier-unknown  { background: var(--surface-2);                     color: var(--fg-subtle);       }
-  .tier-free     { background: rgba(92, 101, 119, 0.15);             color: var(--fg-muted);        }
-  .tier-value    { background: rgba(56, 132, 255, 0.10);             color: rgb(56, 132, 255);      border-color: rgba(56, 132, 255, 0.20);  }
-  .tier-standard { background: rgba(34, 175, 109, 0.12);             color: rgb(34, 175, 109);      border-color: rgba(34, 175, 109, 0.22);  }
-  .tier-pro      { background: rgba(244, 196, 48, 0.14);             color: rgb(212, 158, 0);       border-color: rgba(244, 196, 48, 0.30);  }
 </style>

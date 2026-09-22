@@ -75,17 +75,24 @@ pub fn run() {
             queue::snapshot,
             queue::run_queue,
             queue::worker_pool_active,
-            queue::cancel_task,
+            queue::cancel_tasks,
+            queue::requeue_tasks,
+            queue::remove_tasks,
+            queue::clear_tasks,
+            queue::bump_tasks,
+            queue::duplicate_tasks,
             queue::requeue_failed,
             coverage_cmd::coverage_report,
+            coverage_cmd::requeue_missing_dates,
+            coverage_cmd::missing_dates,
             coverage_cmd::duckdb_command,
             endpoints::endpoints_list,
-            endpoints::endpoints_get,
             endpoints::endpoint_invoke,
             endpoints::list_query,
             endpoints::dataset_catalogue,
-            endpoints::dataset_metadata,
+            endpoints::interval_options,
             flatfiles::flatfile_download,
+            flatfiles::flatfile_datasets,
             index_presets::index_presets,
             index_presets::index_constituents,
             preview::parquet_preview,
@@ -94,7 +101,6 @@ pub fn run() {
             schedule::schedule_delete,
             schedule::schedule_set_paused,
             health::health,
-            health::sdk_version,
             vault::vault_paths,
             tier::tier_status,
             tier::tier_endpoints,
@@ -115,12 +121,17 @@ pub fn run() {
             std::fs::create_dir_all(&data_dir)?;
             secrets::set_data_dir(data_dir.clone());
 
-            // Seed Settings defaults from the Tauri-resolved path so the
-            // first `settings_get` returns sensible cross-platform paths
-            // instead of empty strings.
+            // Restore what the user last saved, then seed any field they
+            // never set from the Tauri-resolved path, so the first
+            // `settings_get` returns real cross-platform paths rather
+            // than empty strings.
             let app_state = app.state::<Arc<AppState>>();
+            let persisted = settings::load_persisted();
             tauri::async_runtime::block_on(async {
                 let mut s = app_state.settings.write().await;
+                if let Some(saved) = persisted {
+                    *s = saved;
+                }
                 if s.db_path.is_empty() {
                     s.db_path = data_dir.join("queue.db").to_string_lossy().into();
                 }
@@ -131,6 +142,10 @@ pub fn run() {
                     s.creds_path = data_dir.join("creds.txt").to_string_lossy().into();
                 }
             });
+
+            // Fire recurring downloads. The ticker no-ops until the user
+            // connects and the queue is open.
+            schedule::spawn_ticker(Arc::clone(app_state.inner()));
 
             // Best-effort tier-table refresh from `docs.thetadata.us`
             // on launch. The build-time table baked from the vendored

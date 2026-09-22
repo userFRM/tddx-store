@@ -35,14 +35,14 @@ pub use registry::{
     find_endpoint, EndpointInfo, ParamInfo,
 };
 pub use schedule::Schedule;
-pub use spec::{DataKind, DataSpec, EndpointSpec};
+pub use spec::{normalize_interval, DataKind, DataSpec, EndpointSpec, IntervalOption, INTERVALS};
 pub use tier::{
     evaluate as tier_evaluate, governing_tier, is_tier_denied, min_tier_for, Tier, TierVerdict,
     UserTiers, UPGRADE_URL,
 };
 pub use transform::Transforms;
 pub use worker::Pool;
-pub use yaml_meta::{catalogue as endpoint_catalogue, endpoint_meta, EndpointMeta};
+pub use yaml_meta::{catalogue as endpoint_catalogue, EndpointMeta};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

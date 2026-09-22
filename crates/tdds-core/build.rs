@@ -106,6 +106,7 @@ fn main() {
 ///     `  /<path>:` (2-space)
 ///       `    x-min-subscription: <tier>` (4-space)
 ///       `    get:` (4-space)
+///         `      operationId: <id>` (6-space)
 ///         `      summary: <text>` (6-space)
 ///         `      description: <text>` OR `      description: |` + indented block
 ///         `      tags:` (6-space) followed by `        - <tag>`
@@ -205,6 +206,24 @@ fn parse_yaml(yaml: &str) -> Result<BTreeMap<String, EndpointMeta>, String> {
         // 6-space fields under `get:`.
         if in_get_block && indent == 6 {
             in_tags_block = false;
+            // The declared `operationId` is authoritative — it is what
+            // the SDK registry names the endpoint, and the desktop
+            // Browse catalogue inner-joins on it. Deriving a key from
+            // the path is only a fallback for a path that omits one:
+            // `/calendar/today` is `calendar_open_today`, and a
+            // path-derived key would silently drop it from the join
+            // and so from the UI.
+            if let Some(rest) = trimmed.strip_prefix("operationId:") {
+                let declared = unquote(rest.trim()).to_string();
+                if !declared.is_empty() && declared != op {
+                    // Carry whatever the path line already collected
+                    // (`x-min-subscription` sits above `get:`).
+                    let carried = out.remove(&op).unwrap_or_default();
+                    out.entry(declared.clone()).or_insert(carried);
+                    current = Some(declared);
+                }
+                continue;
+            }
             if let Some(rest) = trimmed.strip_prefix("summary:") {
                 let val = rest.trim();
                 if !val.is_empty() {

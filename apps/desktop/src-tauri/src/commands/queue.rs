@@ -11,9 +11,10 @@ use serde::Deserialize;
 use tauri::{Emitter, State};
 use tdds_core::{
     coverage, format::OutputFormat, queue::TaskStatus, DataKind, DataSpec, Pool, ProgressEvent,
+    Queue,
 };
 
-use crate::state::{parse_ymd, status_str, AppState, QueueSnapshot, TaskView};
+use crate::state::{parse_ymd, AppState, DiskUsage, QueueSnapshot, TaskView};
 
 #[derive(Deserialize)]
 pub struct EnqueueArgs {
@@ -30,6 +31,11 @@ pub struct EnqueueArgs {
     pub priority: Option<i32>,
     #[serde(default)]
     pub transforms: Option<tdds_core::Transforms>,
+    /// Any other registry parameter the endpoint declares — `max_dte`,
+    /// `strike_range`, `start_time`, the greeks inputs. Keys the
+    /// endpoint does not declare are ignored downstream.
+    #[serde(default)]
+    pub extra: Option<std::collections::BTreeMap<String, String>>,
 }
 
 #[tauri::command]
@@ -62,7 +68,7 @@ pub async fn enqueue(state: State<'_, Arc<AppState>>, args: EnqueueArgs) -> Resu
     let priority = args.priority.unwrap_or(0);
     for d in &dates {
         let spec = DataSpec {
-            kind,
+            kind: kind.clone(),
             symbol: args.symbol.clone(),
             date: *d,
             interval: args.interval.clone(),
@@ -70,6 +76,7 @@ pub async fn enqueue(state: State<'_, Arc<AppState>>, args: EnqueueArgs) -> Resu
             strike: args.strike.clone().unwrap_or_else(|| "*".into()),
             right: args.right.clone().unwrap_or_else(|| "both".into()),
             transforms: args.transforms.clone().unwrap_or_default(),
+            extra: args.extra.clone().unwrap_or_default(),
         };
         queue
             .enqueue(spec, format, &cfg.output_dir, priority)
@@ -77,6 +84,33 @@ pub async fn enqueue(state: State<'_, Arc<AppState>>, args: EnqueueArgs) -> Resu
             .map_err(|e| e.to_string())?;
     }
     Ok(dates.len())
+}
+
+/// How many rows a snapshot carries. The UI paginates against the
+/// counts, which cover the whole table, so this bounds one payload
+/// rather than the queue.
+const SNAPSHOT_ROWS: i64 = 500;
+
+/// How long a disk-footprint reading stays fresh.
+const DISK_USAGE_TTL: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// On-disk footprint, walked at most once per [`DISK_USAGE_TTL`].
+async fn disk_usage(state: &AppState, output_dir: &str) -> Result<DiskUsage, String> {
+    {
+        let cached = state.disk_usage.lock().await;
+        if let Some((taken, usage)) = cached.as_ref() {
+            if taken.elapsed() < DISK_USAGE_TTL {
+                return Ok(*usage);
+            }
+        }
+    }
+    let cov = coverage::scan(&PathBuf::from(output_dir)).map_err(|e| e.to_string())?;
+    let usage = DiskUsage {
+        bytes: cov.iter().map(|c| c.bytes).sum(),
+        files: cov.iter().map(|c| c.dates.len()).sum(),
+    };
+    *state.disk_usage.lock().await = Some((std::time::Instant::now(), usage));
+    Ok(usage)
 }
 
 #[tauri::command]
@@ -88,18 +122,19 @@ pub async fn snapshot(state: State<'_, Arc<AppState>>) -> Result<QueueSnapshot, 
     let counts = queue.counts().await.map_err(|e| e.to_string())?;
     let counts = counts
         .into_iter()
-        .map(|(s, n)| (status_str(s).to_string(), n))
+        .map(|(s, n)| (s.as_str().to_string(), n))
         .collect();
-    let recent_tasks = queue.list(None, 200).await.map_err(|e| e.to_string())?;
+    let recent_tasks = queue
+        .list(None, SNAPSHOT_ROWS)
+        .await
+        .map_err(|e| e.to_string())?;
     let recent: Vec<TaskView> = recent_tasks.into_iter().map(Into::into).collect();
-    let cov = coverage::scan(&PathBuf::from(&cfg.output_dir)).map_err(|e| e.to_string())?;
-    let bytes_on_disk: u64 = cov.iter().map(|c| c.bytes).sum();
-    let files_on_disk: usize = cov.iter().map(|c| c.dates.len()).sum();
+    let usage = disk_usage(&state, &cfg.output_dir).await?;
     Ok(QueueSnapshot {
         counts,
         recent,
-        bytes_on_disk,
-        files_on_disk,
+        bytes_on_disk: usage.bytes,
+        files_on_disk: usage.files,
     })
 }
 
@@ -125,9 +160,8 @@ pub async fn run_queue(
         let g = state.client.read().await;
         g.as_ref().ok_or("client not connected")?.clone()
     };
-    // Per-class concurrency: 2^tier per ThetaData asset class.
-    // Captured here (not at connect) so a tier upgrade picked up by
-    // a fresh `tier_status` refresh is reflected on the next run.
+    // The account-wide in-flight budget, read here rather than at
+    // connect so a tier upgrade applies on the next run.
     let tiers = client.user_tiers();
     // Wire a progress channel: Pool emits Started/Done/Empty/Failed
     // events as workers tick; we forward each to the webview as a
@@ -146,7 +180,12 @@ pub async fn run_queue(
     });
     let h = tokio::spawn(async move {
         let pool = Pool::new(client, queue, tiers).with_events(tx);
-        let _ = pool.run().await;
+        // A pool error means the queue itself is unreachable; individual
+        // task failures are recorded on their rows and never surface
+        // here. Log it rather than dropping it on the floor.
+        if let Err(e) = pool.run().await {
+            tracing::error!(error = %e, "worker pool stopped early");
+        }
     });
     *handle_guard = Some(h);
     Ok(true)
@@ -159,17 +198,96 @@ pub async fn worker_pool_active(state: State<'_, Arc<AppState>>) -> Result<bool,
     Ok(g.as_ref().is_some_and(|h| !h.is_finished()))
 }
 
-/// Cancel a pending or running task. Pending tasks die immediately; a
-/// running task is allowed to finish its current gRPC call (no point
-/// killing the request mid-flight — server is doing the work) but the
-/// row is marked failed/cancelled so the UI updates.
+/// Take the live queue handle, or fail with a message the UI can show.
+async fn queue_of(state: &AppState) -> Result<Queue, String> {
+    let g = state.queue.read().await;
+    Ok(g.as_ref().ok_or("queue not opened")?.clone())
+}
+
+/// Cancel pending or running tasks. A running task is allowed to finish
+/// the request already in flight — the server is doing that work either
+/// way — but its row flips immediately so the UI reflects the click.
+/// Returns how many rows changed.
 #[tauri::command]
-pub async fn cancel_task(state: State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
-    let queue = {
-        let g = state.queue.read().await;
-        g.as_ref().ok_or("queue not opened")?.clone()
+pub async fn cancel_tasks(
+    state: State<'_, Arc<AppState>>,
+    ids: Vec<String>,
+) -> Result<u64, String> {
+    let queue = queue_of(&state).await?;
+    queue.cancel_many(&ids).await.map_err(|e| e.to_string())
+}
+
+/// Put tasks back to pending, whatever their current status.
+#[tauri::command]
+pub async fn requeue_tasks(
+    state: State<'_, Arc<AppState>>,
+    ids: Vec<String>,
+) -> Result<u64, String> {
+    let queue = queue_of(&state).await?;
+    queue.requeue_many(&ids).await.map_err(|e| e.to_string())
+}
+
+/// Delete tasks from the queue, whatever their status. A running task's
+/// request finishes on the server either way; removing the row just
+/// stops tracking it, so this needs no cancel first.
+#[tauri::command]
+pub async fn remove_tasks(
+    state: State<'_, Arc<AppState>>,
+    ids: Vec<String>,
+) -> Result<u64, String> {
+    let queue = queue_of(&state).await?;
+    queue.remove_many(&ids).await.map_err(|e| e.to_string())
+}
+
+/// Delete every finished row, or every row in one finished status.
+/// Acts on the whole queue, not just the page the UI has loaded.
+#[tauri::command]
+pub async fn clear_tasks(
+    state: State<'_, Arc<AppState>>,
+    status: Option<String>,
+) -> Result<u64, String> {
+    let queue = queue_of(&state).await?;
+    let status = match status.as_deref() {
+        None | Some("") | Some("all") => None,
+        Some(s) => Some(TaskStatus::parse(s).ok_or_else(|| format!("unknown status {s}"))?),
     };
-    queue.cancel(&id).await.map_err(|e| e.to_string())
+    queue
+        .clear_finished(status)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Move pending tasks to the front of the queue. Returns how many moved;
+/// a task a worker already claimed does not.
+#[tauri::command]
+pub async fn bump_tasks(
+    state: State<'_, Arc<AppState>>,
+    ids: Vec<String>,
+) -> Result<usize, String> {
+    let queue = queue_of(&state).await?;
+    let mut moved = 0;
+    for id in &ids {
+        if queue.bump_priority(id).await.map_err(|e| e.to_string())? {
+            moved += 1;
+        }
+    }
+    Ok(moved)
+}
+
+/// Queue fresh copies of tasks. Useful for re-pulling a date whose file
+/// was deleted, or re-running one that came back empty.
+#[tauri::command]
+pub async fn duplicate_tasks(
+    state: State<'_, Arc<AppState>>,
+    ids: Vec<String>,
+) -> Result<usize, String> {
+    let queue = queue_of(&state).await?;
+    let mut made = 0;
+    for id in &ids {
+        queue.duplicate(id).await.map_err(|e| e.to_string())?;
+        made += 1;
+    }
+    Ok(made)
 }
 
 #[tauri::command]

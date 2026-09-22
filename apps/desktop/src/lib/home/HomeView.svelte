@@ -22,36 +22,19 @@
     Database,
     Clock,
   } from "lucide-svelte";
-  import { onMount } from "svelte";
-  import { app, navigate } from "$lib/stores/app.svelte";
-  import { api, fmtBytes, type Coverage, type TierName } from "$lib/api";
+  import { app, navigate, loadCoverage } from "$lib/stores/app.svelte";
+  import { fmtBytes, type TierName } from "$lib/api";
   import { openUrl } from "@tauri-apps/plugin-opener";
 
   // ── Library snapshot ─────────────────────────────────────────
-  let coverage = $state<Coverage[]>([]);
-  let coverageLoading = $state(false);
+  const coverage = $derived(app.coverage);
+  const coverageLoading = $derived(app.coverageLoading);
 
-  onMount(async () => {
-    if (app.connState !== "connected") return;
-    coverageLoading = true;
-    try {
-      coverage = await api.coverage();
-    } catch {
-      // not yet connected — silently skip
-    } finally {
-      coverageLoading = false;
-    }
-  });
-
-  // Re-fetch when connection is established mid-session.
+  // Shared with the Library view and invalidated by the queue poll when
+  // a task finishes, so this card does not keep showing pre-download
+  // numbers. Connecting mid-session triggers the same load.
   $effect(() => {
-    if (app.connState === "connected" && coverage.length === 0 && !coverageLoading) {
-      coverageLoading = true;
-      api.coverage()
-        .then((r) => { coverage = r; })
-        .catch(() => {})
-        .finally(() => { coverageLoading = false; });
-    }
+    if (app.connState === "connected") void loadCoverage();
   });
 
   // ── Derived stats ─────────────────────────────────────────────
@@ -189,7 +172,7 @@
           {#if showUpgrade}
             <button
               type="button"
-              class="upgrade-btn-inline"
+              class="btn btn-primary btn-sm"
               onclick={handleUpgrade}
               aria-label="Open ThetaData pricing page"
             >
@@ -449,22 +432,6 @@
     letter-spacing: -0.005em;
   }
 
-  .upgrade-btn-inline {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--sp-1);
-    padding: 3px var(--sp-3);
-    background: var(--accent);
-    color: #fff;
-    border: none;
-    border-radius: var(--r-pill);
-    font-size: var(--text-caption);
-    font-weight: var(--weight-semi);
-    cursor: pointer;
-    transition: filter var(--dur-fast) var(--ease-standard);
-  }
-  .upgrade-btn-inline:hover { filter: brightness(1.08); }
-  .upgrade-btn-inline:active { filter: brightness(0.92); }
 
   .tier-pills-row {
     display: flex;
@@ -487,7 +454,10 @@
   }
 
   .tier-pill-label {
-    color: var(--fg-muted);
+    /* Follows the chip's own foreground, which is white once the chip
+       is filled. A fixed grey here was unreadable on the Pro gradient. */
+    color: inherit;
+    opacity: 0.85;
     display: block;
   }
 
@@ -519,10 +489,6 @@
 
   /* Tier color variants — match KindGrid pill palette */
   .tier-unknown  { background: var(--surface-2);                     color: var(--fg-subtle);      border-color: var(--border); }
-  .tier-free     { background: rgba(92, 101, 119, 0.15);             color: var(--fg-muted);       }
-  .tier-value    { background: rgba(56, 132, 255, 0.10);             color: rgb(56, 132, 255);     border-color: rgba(56, 132, 255, 0.20); }
-  .tier-standard { background: rgba(34, 175, 109, 0.12);             color: rgb(34, 175, 109);     border-color: rgba(34, 175, 109, 0.22); }
-  .tier-pro      { background: rgba(244, 196, 48, 0.14);             color: rgb(212, 158, 0);      border-color: rgba(244, 196, 48, 0.30); }
 
   /* ── Section shared ─────────────────────────────────────────── */
   .section-header {

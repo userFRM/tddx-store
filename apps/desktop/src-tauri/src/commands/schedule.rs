@@ -1,12 +1,15 @@
-//! Scheduled-download CRUD. The schedule table lives alongside the
-//! task queue in the same SQLite file (`schedules`), with a separate
-//! ticker (in `tdds-core` or `tdds-cli schedule run`) firing rows.
+//! Scheduled-download CRUD, plus the ticker that fires the rows.
+//!
+//! The schedule table lives alongside the task queue in the same SQLite
+//! file. [`spawn_ticker`] polls it once a minute and enqueues the due
+//! rows; without it the table would be a list the app writes and never
+//! reads, which is what it was.
 
 use std::sync::Arc;
 
 use serde::Deserialize;
 use tauri::State;
-use tdds_core::{format::OutputFormat, schedule, DataKind, Schedule};
+use tdds_core::{format::OutputFormat, schedule, DataKind, DataSpec, Schedule};
 
 use crate::state::AppState;
 
@@ -84,4 +87,81 @@ pub async fn schedule_set_paused(
     schedule::set_paused(queue.pool(), &id, paused)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Poll the schedule table once a minute and enqueue whatever is due.
+///
+/// Runs for the life of the process, started from the Tauri setup hook.
+/// Before the user connects there is no queue, so the tick is a cheap
+/// no-op rather than an error.
+pub fn spawn_ticker(state: Arc<AppState>) {
+    tauri::async_runtime::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(SCHEDULE_TICK_SECS));
+        loop {
+            ticker.tick().await;
+            if let Err(e) = tick(&state).await {
+                tracing::warn!(error = %e, "schedule tick failed");
+            }
+        }
+    });
+}
+
+/// How often the ticker wakes. A schedule's resolution is one minute,
+/// so polling faster only costs a SQL round-trip.
+const SCHEDULE_TICK_SECS: u64 = 60;
+
+async fn tick(state: &AppState) -> Result<(), String> {
+    let queue = {
+        let guard = state.queue.read().await;
+        match guard.as_ref() {
+            Some(q) => q.clone(),
+            None => return Ok(()),
+        }
+    };
+    let output_dir = state.settings.read().await.output_dir.clone();
+    if output_dir.is_empty() {
+        return Ok(());
+    }
+
+    let now = chrono::Utc::now();
+    let rows = schedule::due(queue.pool(), now)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    for row in rows {
+        // Which session is available is an Eastern-time question, and
+        // separate from the local-clock time the user picked to fire
+        // at. The queue skips a file that is already on disk, so a
+        // re-fire costs nothing.
+        let Some(date) = schedule::last_available_session(now) else {
+            continue;
+        };
+        let spec = DataSpec {
+            kind: row.kind.clone(),
+            symbol: row.symbol.clone(),
+            date,
+            interval: None,
+            expiration: "*".into(),
+            strike: "*".into(),
+            right: "both".into(),
+            transforms: Default::default(),
+            extra: Default::default(),
+        };
+        match queue.enqueue(spec, row.format, &output_dir, 0).await {
+            Ok(_) => {
+                if let Err(e) = schedule::mark_fired(queue.pool(), &row.id, now.timestamp()).await {
+                    tracing::error!(error = %e, schedule = %row.id, "mark_fired failed");
+                } else {
+                    tracing::info!(
+                        schedule = %row.id, name = %row.name, symbol = %row.symbol,
+                        date = %date, "schedule fired"
+                    );
+                }
+            }
+            // Leave `last_fired_at` alone so the next tick retries rather
+            // than silently skipping a day.
+            Err(e) => tracing::error!(error = %e, schedule = %row.id, "schedule enqueue failed"),
+        }
+    }
+    Ok(())
 }

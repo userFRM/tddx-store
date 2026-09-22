@@ -7,10 +7,10 @@ build = "build.rs"
 
 [dependencies]
 thetadatadx.workspace = true
-tdbe.workspace = true
 rustls.workspace = true
 tokio.workspace = true
 chrono.workspace = true
+chrono-tz.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true

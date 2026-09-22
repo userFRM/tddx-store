@@ -12,7 +12,7 @@
       `tdds-cli`, `apps/desktop` (Tauri 2 + SvelteKit + Vite + TS).
 - [x] **Backend engine** — SQLite-backed task queue, async worker pool,
       Arrow → Parquet/CSV/JSON/JSONL writers, on-disk coverage scanner.
-- [x] **Registry dispatch** — every one of the 61 thetadatadx endpoints
+- [x] **Registry dispatch** — every endpoint in the SDK registry
       reachable via `dispatch_to_file(client, EndpointSpec, …)` and exposed
       through the `endpoints_list` / `endpoint_invoke` / `list_query` Tauri
       commands.
@@ -28,7 +28,7 @@
 ### Sprint 1 — make it production-feeling (1–2 days)
 
 - [ ] **All endpoints surfaced** — generate one card per endpoint from
-      `endpoints_list()` so users see all 61, not just the seven curated
+      `endpoints_list()` so users see all of them, not just the seven curated
       tick kinds. Detail page renders required + optional params from
       registry metadata; one-shot "Run once" button uses `endpoint_invoke`.
 - [ ] **Flatfile endpoints** — `flatfile_*` lives outside the registry.

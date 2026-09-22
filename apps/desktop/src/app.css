@@ -34,6 +34,20 @@ html, body {
 ::-webkit-scrollbar-thumb:hover { background: var(--fg-subtle); }
 ::-webkit-scrollbar-corner   { background: transparent; }
 
+/* ── Links ──────────────────────────────────────────────────── */
+/* There was no rule here at all, so every plain anchor fell back to the
+   browser's default navy — invisible against a dark surface. */
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover { color: var(--accent-hi); text-decoration: underline; }
+a:focus-visible {
+  outline: none;
+  border-radius: 2px;
+  box-shadow: var(--shadow-glow-accent);
+}
+
 /* ── Typography utilities ───────────────────────────────────── */
 .text-display-xl {
   font-family: var(--font-display);
@@ -65,15 +79,20 @@ html, body {
   line-height: 1.4;
   color: var(--fg-muted);
 }
-.text-mono {
+.text-figures {
   font-family: var(--font-mono);
-  font-size: var(--text-mono);
+  font-size: var(--text-figures);
   font-variant-numeric: tabular-nums;
   line-height: 1.4;
 }
+/* Column-aligned figures: counts, sizes, durations, percentages. Inter
+   with tabular figures, because alignment is the requirement here and a
+   monospaced face is not. `.text-figures` stays mono for the things that
+   are genuinely code-shaped — tickers, contract specs, paths, hashes. */
 .tabnum {
+  font-family: var(--font-numeric);
   font-variant-numeric: tabular-nums;
-  font-family: var(--font-mono);
+  font-feature-settings: "tnum" 1, "cv05" 1;
 }
 
 /* ── Color utilities ────────────────────────────────────────── */
@@ -104,17 +123,40 @@ button { font-family: inherit; cursor: pointer; }
   white-space: nowrap;
   outline: none;
 }
+/* Compact variant for buttons that sit inline with text or inside a
+   chip — the top-bar badge, a tier row, a card action. Same fill, same
+   radius, same transitions as any other button; only the box shrinks.
+   Four components had each rolled their own version of this at four
+   different sizes, all filling with `--accent`, which is the link
+   colour rather than the fill. */
+.btn-sm {
+  height: 28px;
+  padding: 0 var(--sp-3);
+  gap: var(--sp-1);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-semi);
+  letter-spacing: 0.02em;
+}
+
 .btn:focus-visible {
   box-shadow: var(--shadow-glow-accent);
 }
 
 .btn-primary {
-  background: var(--accent);
-  color: #fff;
+  /* A fill, not a link colour — see `--accent-fill` in tokens.css for
+     why those are separate. The gradient is a shallow vertical ramp of
+     one blue; it gives the control depth without introducing a hue. */
+  background: var(--accent-fill);
+  color: var(--on-accent);
   font-weight: var(--weight-semi);
+  border-color: transparent;
+  box-shadow: var(--accent-fill-edge);
 }
-.btn-primary:hover  { background: var(--accent-hi); }
-.btn-primary:active { background: var(--accent-lo); }
+.btn-primary:hover  {
+  background: var(--accent-fill-hi);
+  box-shadow: var(--accent-fill-edge), var(--accent-fill-glow);
+}
+.btn-primary:active { background: var(--accent-fill-hi); filter: brightness(0.94); }
 
 .btn-secondary {
   background: var(--surface-2);
@@ -201,11 +243,28 @@ input::placeholder { color: var(--fg-subtle); }
   text-transform: uppercase;
   white-space: nowrap;
 }
-.pill-pending  { background: rgba(92, 101, 119, 0.18); color: var(--fg-muted); }
-.pill-running  { background: rgba(124, 140, 255, 0.18); color: var(--accent-hi); }
-.pill-done     { background: rgba(93, 212, 160, 0.15); color: var(--good); }
-.pill-failed   { background: rgba(255, 126, 126, 0.15); color: var(--bad); }
-.pill-empty    { background: rgba(245, 197, 111, 0.15); color: var(--warn); }
+.pill-pending  { background: var(--neutral-tint); color: var(--fg-muted); }
+.pill-running  { background: var(--accent-tint-strong); color: var(--accent-hi); }
+.pill-done     { background: var(--good-tint); color: var(--good); }
+.pill-failed   { background: var(--bad-tint); color: var(--bad); }
+.pill-empty    { background: var(--warn-tint); color: var(--warn); }
+
+/* ── Subscription-tier pills ────────────────────────────────── */
+/* One definition for every surface that renders a tier. Colours come
+   from the `--tier-*` tokens so the two themes stay in step, and the
+   rule is global so a component only has to apply the class. Five
+   components used to carry their own copy of this block. */
+.tier-free     { background: var(--tier-free-bg);     color: var(--tier-free-fg);     border-color: var(--tier-free-border); }
+.tier-value    { background: var(--tier-value-bg);    color: var(--tier-value-fg);    border-color: var(--tier-value-border); }
+.tier-standard { background: var(--tier-standard-bg); color: var(--tier-standard-fg); border-color: var(--tier-standard-border); }
+.tier-pro      { background: var(--tier-pro-bg);      color: var(--tier-pro-fg);      border-color: var(--tier-pro-border); }
+.tier-unknown  { background: var(--tier-free-bg);     color: var(--tier-free-fg);     border-color: var(--tier-free-border); }
+
+/* The inner label of a tier chip follows the chip's own ink rather than
+   a global grey — but that rule has to live in each component, because
+   Svelte's scoped styles are injected after this file and win on equal
+   specificity. See HomeView and TierBadge. */
+
 
 .pill-dot {
   width: 6px;
@@ -256,7 +315,7 @@ input::placeholder { color: var(--fg-subtle); }
   transition: width var(--dur-base) var(--ease-standard);
 }
 .progress-fill.running {
-  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-hi) 100%);
+  background: var(--brand-gradient);
 }
 
 /* Indeterminate "in flight" stripe — animates a ~40% wide highlight
