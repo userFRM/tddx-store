@@ -487,7 +487,10 @@
   }
 
   .tier-pill-label {
-    color: var(--fg-muted);
+    /* Follows the chip's own foreground, which is white once the chip
+       is filled. A fixed grey here was unreadable on the Pro gradient. */
+    color: inherit;
+    opacity: 0.85;
     display: block;
   }
 

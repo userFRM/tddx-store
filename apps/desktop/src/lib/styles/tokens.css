@@ -128,7 +128,19 @@
   /* ── Typography ─────────────────────────────────────────── */
   --font-ui:        "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-display:   "Inter", system-ui, -apple-system, sans-serif;
-  --font-mono:      "IBM Plex Mono", "SF Mono", Consolas, ui-monospace, monospace;
+  /* The platform's own modern mono — SF Mono on macOS, Cascadia on
+     Windows, whatever the desktop ships on Linux. The brand sheet names
+     IBM Plex Mono, but that is a slab face built for print and it reads
+     as a typewriter on screen. `ui-monospace` also means no webfont to
+     download and no flash of fallback text. */
+  --font-mono:      ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono",
+                    "Roboto Mono", Menlo, Consolas, monospace;
+
+  /* Figures that need to line up in a column do not need a monospaced
+     face; they need tabular figures, which Inter has. Using this rather
+     than the mono keeps tables aligned without making a byte count look
+     like terminal output. */
+  --font-numeric:   var(--font-ui);
 
   /* The brand type scale is sized for a marketing page (48/32/24/16).
      A downloader is a dense working surface, so the scale below keeps

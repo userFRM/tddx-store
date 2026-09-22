@@ -85,9 +85,14 @@ a:focus-visible {
   font-variant-numeric: tabular-nums;
   line-height: 1.4;
 }
+/* Column-aligned figures: counts, sizes, durations, percentages. Inter
+   with tabular figures, because alignment is the requirement here and a
+   monospaced face is not. `.text-mono` stays mono for the things that
+   are genuinely code-shaped — tickers, contract specs, paths, hashes. */
 .tabnum {
+  font-family: var(--font-numeric);
   font-variant-numeric: tabular-nums;
-  font-family: var(--font-mono);
+  font-feature-settings: "tnum" 1, "cv05" 1;
 }
 
 /* ── Color utilities ────────────────────────────────────────── */
@@ -240,17 +245,10 @@ input::placeholder { color: var(--fg-subtle); }
 .tier-pro      { background: var(--tier-pro-bg);      color: var(--tier-pro-fg);      border-color: var(--tier-pro-border); }
 .tier-unknown  { background: var(--tier-free-bg);     color: var(--tier-free-fg);     border-color: var(--tier-free-border); }
 
-/* Inner label and value inherit the chip's own ink. They used to take a
-   global grey, which is invisible the moment a chip is filled. */
-.tier-free .tier-pill-label, .tier-value .tier-pill-label,
-.tier-standard .tier-pill-label, .tier-pro .tier-pill-label,
-.tier-unknown .tier-pill-label,
-.tier-free .pill-label, .tier-value .pill-label,
-.tier-standard .pill-label, .tier-pro .pill-label,
-.tier-unknown .pill-label {
-  color: inherit;
-  opacity: 0.78;
-}
+/* The inner label of a tier chip follows the chip's own ink rather than
+   a global grey — but that rule has to live in each component, because
+   Svelte's scoped styles are injected after this file and win on equal
+   specificity. See HomeView and TierBadge. */
 
 
 .pill-dot {

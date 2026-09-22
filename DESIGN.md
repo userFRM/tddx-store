@@ -194,9 +194,18 @@ tool from a generic dashboard.
 `caption` (uppercase, tracked, muted) is for column headers, section
 labels, and metadata pairs. Never for body copy.
 
-IBM Plex Mono — the brand's code face — for: tickers, contract specs
-(`SPXW 20260516 P 5400`), file paths, hashes, timestamps, code-like
-values.
+For code-shaped values — tickers, contract specs
+(`SPXW 20260516 P 5400`), file paths, hashes — use `--font-mono`, which
+resolves to the platform's own modern mono: SF Mono on macOS, Cascadia
+on Windows. The brand sheet names IBM Plex Mono, but that is a slab
+face built for print and reads as a typewriter on screen; `ui-monospace`
+also avoids shipping a webfont for a desktop app.
+
+**A number in a column is not code.** Counts, byte sizes, durations and
+percentages use `.tabnum`, which is Inter with tabular figures. Digits
+align perfectly, which is the actual requirement, and the table stops
+looking like terminal output. Reach for the mono only when the value
+would be wrong to re-wrap or re-space.
 
 ## The wordmark
 

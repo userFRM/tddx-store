@@ -101,7 +101,8 @@
     border: 1px solid transparent;
     font-variant-numeric: tabular-nums;
   }
-  .pill .pill-label { color: var(--fg-muted); }
+  /* Same reason as HomeView: the chip owns its ink, the label follows. */
+  .pill .pill-label { color: inherit; opacity: 0.85; }
   .pill .pill-value { font-weight: 600; letter-spacing: 0.02em; }
   .upgrade-btn {
     display: inline-flex;
