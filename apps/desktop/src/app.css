@@ -123,6 +123,21 @@ button { font-family: inherit; cursor: pointer; }
   white-space: nowrap;
   outline: none;
 }
+/* Compact variant for buttons that sit inline with text or inside a
+   chip — the top-bar badge, a tier row, a card action. Same fill, same
+   radius, same transitions as any other button; only the box shrinks.
+   Four components had each rolled their own version of this at four
+   different sizes, all filling with `--accent`, which is the link
+   colour rather than the fill. */
+.btn-sm {
+  height: 28px;
+  padding: 0 var(--sp-3);
+  gap: var(--sp-1);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-semi);
+  letter-spacing: 0.02em;
+}
+
 .btn:focus-visible {
   box-shadow: var(--shadow-glow-accent);
 }

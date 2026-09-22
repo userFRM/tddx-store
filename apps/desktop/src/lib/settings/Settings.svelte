@@ -232,7 +232,7 @@
               {#if !row.at_max}
                 <button
                   type="button"
-                  class="conc-upgrade"
+                  class="btn btn-primary btn-sm"
                   onclick={handleUpgrade}
                   aria-label={`Upgrade ${row.label.toLowerCase()} tier`}
                 >
@@ -413,21 +413,4 @@
     min-width: 5em;
     text-align: right;
   }
-  .conc-upgrade {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 3px 8px;
-    border: 1px solid var(--accent);
-    background: var(--accent);
-    color: white;
-    border-radius: var(--r-sm);
-    font-size: var(--text-caption);
-    font-weight: var(--weight-semi);
-    cursor: pointer;
-    line-height: 1;
-    transition: filter var(--dur-fast) var(--ease-standard);
-  }
-  .conc-upgrade:hover { filter: brightness(1.08); }
-  .conc-upgrade:active { filter: brightness(0.95); }
 </style>

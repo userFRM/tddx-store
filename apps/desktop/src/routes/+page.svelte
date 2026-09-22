@@ -126,8 +126,7 @@
   <!-- ── Top bar ──────────────────────────────────────────── -->
   <header class="topbar" data-tauri-drag-region>
     <div class="brand" data-tauri-drag-region>
-      <span class="brand-logo"><ThetaDataLogo height={22} /></span>
-      <span class="brand-name">Store</span>
+      <span class="brand-logo"><ThetaDataLogo height={28} suffix="Store" /></span>
       <span class="brand-tag text-caption">v{APP_VERSION}</span>
     </div>
 
@@ -301,13 +300,6 @@
     display: block;
     -webkit-user-select: none;
     user-select: none;
-  }
-  .brand-name {
-    font-size: var(--text-heading);
-    font-weight: var(--weight-semi);
-    letter-spacing: -0.01em;
-    color: var(--fg-muted);
-    margin-left: 2px;
   }
   .brand-tag {
     color: var(--fg-subtle);

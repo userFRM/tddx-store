@@ -187,6 +187,11 @@ export const api = {
   listQuery: (args: ListQueryArgs) => invoke<string[]>("list_query", { args }),
   flatfileDownload: (args: FlatfileArgs) => invoke<string>("flatfile_download", { args }),
   flatfileDatasets: () => invoke<FlatfileDataset[]>("flatfile_datasets"),
+  /** The exact trading days absent from a set's span, `YYYY-MM-DD`.
+   *  Read-only; the count matches what `requeueMissingDates` would act
+   *  on, so the UI never shows a number the server disagrees with. */
+  missingDates: (kind: string, symbol: string) =>
+    invoke<string[]>("missing_dates", { kind, symbol }),
   requeueMissingDates: (kind: string, symbol: string) =>
     invoke<number>("requeue_missing_dates", { kind, symbol }),
   indexPresets: () => invoke<IndexPresetView[]>("index_presets"),

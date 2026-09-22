@@ -189,7 +189,7 @@
           {#if showUpgrade}
             <button
               type="button"
-              class="upgrade-btn-inline"
+              class="btn btn-primary btn-sm"
               onclick={handleUpgrade}
               aria-label="Open ThetaData pricing page"
             >
@@ -449,22 +449,6 @@
     letter-spacing: -0.005em;
   }
 
-  .upgrade-btn-inline {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--sp-1);
-    padding: 3px var(--sp-3);
-    background: var(--accent);
-    color: var(--on-accent);
-    border: none;
-    border-radius: var(--r-pill);
-    font-size: var(--text-caption);
-    font-weight: var(--weight-semi);
-    cursor: pointer;
-    transition: filter var(--dur-fast) var(--ease-standard);
-  }
-  .upgrade-btn-inline:hover { filter: brightness(1.08); }
-  .upgrade-btn-inline:active { filter: brightness(0.92); }
 
   .tier-pills-row {
     display: flex;

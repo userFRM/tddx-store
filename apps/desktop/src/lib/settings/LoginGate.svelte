@@ -134,8 +134,7 @@
   <div class="gate-backdrop">
     <div class="gate">
       <div class="brand-row">
-        <span class="brand-logo"><ThetaDataLogo height={28} /></span>
-        <span class="brand-name">Store</span>
+        <span class="brand-logo"><ThetaDataLogo height={34} suffix="Store" /></span>
       </div>
       <h1 class="gate-title">Sign in to ThetaData</h1>
       <p class="gate-sub">Streams market data using your ThetaData account.</p>
@@ -342,12 +341,6 @@
     display: block;
     -webkit-user-select: none;
     user-select: none;
-  }
-  .brand-name {
-    font-weight: var(--weight-semi);
-    font-size: 17px;
-    color: var(--fg-muted);
-    margin-left: 2px;
   }
   .gate-title {
     font-family: var(--font-display);

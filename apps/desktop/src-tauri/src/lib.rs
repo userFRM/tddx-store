@@ -84,6 +84,7 @@ pub fn run() {
             queue::requeue_failed,
             coverage_cmd::coverage_report,
             coverage_cmd::requeue_missing_dates,
+            coverage_cmd::missing_dates,
             coverage_cmd::duckdb_command,
             endpoints::endpoints_list,
             endpoints::endpoints_get,

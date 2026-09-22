@@ -31,6 +31,11 @@
 
   /** Queue every trading day missing from a set's own span. */
   async function refillGaps(row: Coverage) {
+    // The count is now queued work, so the panel's copy of it is stale.
+    const key = gapKey(row);
+    const { [key]: _dropped, ...rest } = gaps;
+    gaps = rest;
+    openGaps = new Set([...openGaps].filter((k) => k !== key));
     rowMsg = `Checking ${row.symbol} ${row.kind}…`;
     try {
       const n = await api.requeueMissingDates(row.kind, row.symbol);
@@ -116,24 +121,69 @@
     return rows.map((r) => r.last).filter(Boolean).sort().pop() ?? null;
   }
 
-  /** Trading days inside a set's own span that are not on disk. Weekends
-   *  and holidays are not gaps, so this only counts weekdays and still
-   *  overstates around market holidays — the exact figure needs the
-   *  server's calendar, which is what the refill call fetches. */
-  function approxGaps(row: Coverage): number {
-    if (!row.first || !row.last) return 0;
-    const have = new Set(row.dates);
-    let weekdays = 0;
-    const cursor = new Date(row.first);
-    const end = new Date(row.last);
-    while (cursor <= end) {
-      const dow = cursor.getUTCDay();
-      if (dow !== 0 && dow !== 6 && !have.has(cursor.toISOString().slice(0, 10))) {
-        weekdays += 1;
+  /** Per-row gap state, keyed `kind|symbol`. Absent until the user
+   *  asks: the answer needs the vendor's trading calendar, so it is a
+   *  network call, not something to fire for every visible row. */
+  type GapState =
+    | { status: "loading" }
+    | { status: "error"; message: string }
+    | { status: "ready"; dates: string[] };
+  let gaps = $state<Record<string, GapState>>({});
+  let openGaps = $state<Set<string>>(new Set());
+
+  const gapKey = (row: Coverage) => `${row.kind}|${row.symbol}`;
+
+  /** Collapse a date list into contiguous runs, so 33 scattered days
+   *  read as a handful of ranges instead of a wall of dates. */
+  function toRanges(dates: string[]): { from: string; to: string; days: number }[] {
+    const out: { from: string; to: string; days: number }[] = [];
+    for (const date of dates) {
+      const prev = out[out.length - 1];
+      const dayAfter = prev
+        ? new Date(new Date(prev.to + "T00:00:00Z").getTime() + 86_400_000)
+            .toISOString()
+            .slice(0, 10)
+        : null;
+      // Runs join across a weekend, since Saturday and Sunday are not
+      // gaps and would otherwise split every week into its own range.
+      const within = prev && date > prev.to && date <= addDays(prev.to, 3);
+      if (prev && (date === dayAfter || within)) {
+        prev.to = date;
+        prev.days += 1;
+      } else {
+        out.push({ from: date, to: date, days: 1 });
       }
-      cursor.setUTCDate(cursor.getUTCDate() + 1);
     }
-    return weekdays;
+    return out;
+  }
+
+  function addDays(iso: string, n: number): string {
+    return new Date(new Date(iso + "T00:00:00Z").getTime() + n * 86_400_000)
+      .toISOString()
+      .slice(0, 10);
+  }
+
+  async function toggleGaps(row: Coverage) {
+    const key = gapKey(row);
+    const next = new Set(openGaps);
+    if (next.has(key)) {
+      next.delete(key);
+      openGaps = next;
+      return;
+    }
+    next.add(key);
+    openGaps = next;
+    if (gaps[key]?.status === "ready") return;
+    gaps = { ...gaps, [key]: { status: "loading" } };
+    try {
+      const dates = await api.missingDates(row.kind, row.symbol);
+      gaps = { ...gaps, [key]: { status: "ready", dates } };
+    } catch (e: unknown) {
+      gaps = {
+        ...gaps,
+        [key]: { status: "error", message: e instanceof Error ? e.message : String(e) },
+      };
+    }
   }
 
   /** Fill gaps across every dataset held for one symbol. */
@@ -235,7 +285,7 @@
       <h1 class="lib-title">Library</h1>
       {#if coverage.length > 0}
         <span class="lib-meta text-mono fg-muted">
-          {grouped.length} symbols · {fmtBytes(coverage.reduce((s, r) => s + r.bytes, 0))} total
+          {grouped.length} {grouped.length === 1 ? "symbol" : "symbols"} · {fmtBytes(coverage.reduce((s, r) => s + r.bytes, 0))} total
         </span>
       {/if}
     </div>
@@ -302,7 +352,6 @@
         <div class="symbol-list" role="list">
           {#each grouped as [symbol, rows] (symbol)}
             {@const expanded = expandedSymbols.has(symbol)}
-            {@const symbolGaps = rows.reduce((n, r) => n + approxGaps(r), 0)}
             <div class="symbol-group" role="listitem">
               <button
                 class="symbol-row"
@@ -330,19 +379,14 @@
               </button>
 
               <div class="symbol-aside">
-                {#if symbolGaps > 0}
-                  <span class="gap-pill" title="Weekdays inside the span with no file">
-                    {fmtNum(symbolGaps)} missing
-                  </span>
-                {/if}
                 <button
-                  class="btn-icon"
+                  class="btn btn-secondary btn-sm"
                   onclick={() => refillSymbol(symbol, rows)}
                   disabled={busy}
-                  title="Queue the missing dates across every dataset for {symbol}"
-                  aria-label="Queue the missing dates for {symbol}"
+                  title="Check every dataset for {symbol} and queue whatever is missing"
                 >
-                  <RotateCcw size={13} strokeWidth={1.75} />
+                  <RotateCcw size={12} strokeWidth={1.75} />
+                  Fill gaps
                 </button>
               </div>
 
@@ -362,11 +406,23 @@
                         <span>{row.format}</span>
                         <span class="sum-sep">·</span>
                         <span>{row.first ?? "—"} → {row.last ?? "—"}</span>
-                        {#if approxGaps(row) > 0}
-                          <span class="sum-sep">·</span>
-                          <span class="gap-count">{fmtNum(approxGaps(row))} missing</span>
-                        {/if}
                       </div>
+                      <button
+                        class="gap-toggle"
+                        class:open={openGaps.has(gapKey(row))}
+                        onclick={() => toggleGaps(row)}
+                        aria-expanded={openGaps.has(gapKey(row))}
+                      >
+                        {#if gaps[gapKey(row)]?.status === "loading"}
+                          Checking…
+                        {:else if gaps[gapKey(row)]?.status === "ready"}
+                          {@const n = (gaps[gapKey(row)] as { dates: string[] }).dates.length}
+                          {n === 0 ? "Complete" : `${fmtNum(n)} missing`}
+                        {:else}
+                          Check gaps
+                        {/if}
+                      </button>
+
                       <div class="kind-actions">
                         <button
                           class="btn-icon"
@@ -394,6 +450,54 @@
                         </button>
                       </div>
                     </div>
+
+                    {#if openGaps.has(gapKey(row))}
+                      {@const state = gaps[gapKey(row)]}
+                      <div class="gap-panel">
+                        {#if !state || state.status === "loading"}
+                          <span class="gap-note fg-muted text-body-sm">
+                            Asking ThetaData which days it has for {row.symbol}…
+                          </span>
+                        {:else if state.status === "error"}
+                          <span class="gap-note text-body-sm" style="color: var(--bad)">
+                            {state.message}
+                          </span>
+                        {:else if state.dates.length === 0}
+                          <span class="gap-note fg-muted text-body-sm">
+                            Every trading day between {row.first} and {row.last} is on disk.
+                          </span>
+                        {:else}
+                          <div class="gap-head">
+                            <span class="gap-note text-body-sm">
+                              {fmtNum(state.dates.length)} trading
+                              {state.dates.length === 1 ? "day" : "days"} missing between
+                              {row.first} and {row.last}. Market holidays are excluded —
+                              these are days ThetaData has and you do not.
+                            </span>
+                            <button
+                              class="btn btn-primary btn-sm"
+                              disabled={busy}
+                              onclick={() => refillGaps(row)}
+                            >
+                              Queue {fmtNum(state.dates.length)}
+                              {state.dates.length === 1 ? "day" : "days"}
+                            </button>
+                          </div>
+                          <ul class="gap-ranges">
+                            {#each toRanges(state.dates) as range}
+                              <li class="gap-range text-mono">
+                                {#if range.days === 1}
+                                  {range.from}
+                                {:else}
+                                  {range.from} → {range.to}
+                                  <span class="fg-subtle">({range.days})</span>
+                                {/if}
+                              </li>
+                            {/each}
+                          </ul>
+                        {/if}
+                      </div>
+                    {/if}
                   {/each}
                 </div>
               {/if}
@@ -473,6 +577,55 @@
   }
 
   /* Header */
+  .gap-toggle {
+    justify-self: end;
+    padding: 2px var(--sp-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-pill);
+    background: transparent;
+    color: var(--fg-muted);
+    font-size: var(--text-caption);
+    font-family: var(--font-ui);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color var(--dur-fast) var(--ease-standard),
+                color var(--dur-fast) var(--ease-standard);
+  }
+  .gap-toggle:hover, .gap-toggle.open {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .gap-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    padding: var(--sp-3) var(--sp-4);
+    margin: 0 0 var(--sp-2) var(--sp-8);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+  }
+  .gap-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--sp-4);
+  }
+  .gap-note { max-width: 62ch; }
+  .gap-ranges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--sp-1) var(--sp-3);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .gap-range {
+    font-size: var(--text-caption);
+    color: var(--fg-muted);
+  }
+
   .row-msg {
     color: var(--fg-muted);
     margin-left: auto;
@@ -614,7 +767,7 @@
 
   .kind-row {
     display: grid;
-    grid-template-columns: 1fr auto auto;
+    grid-template-columns: 1fr auto auto auto;
     align-items: center;
     gap: var(--sp-4);
     padding: var(--sp-3) var(--sp-8) var(--sp-3) calc(var(--sp-8) + 80px + var(--sp-3));

@@ -229,7 +229,7 @@
             You're on <span class="tabnum">{verdict.user}</span>. Upgrade your
             ThetaData subscription to queue this dataset.
           </div>
-          <button class="btn-upgrade" onclick={handleUpgrade}>
+          <button class="btn btn-primary btn-sm" onclick={handleUpgrade}>
             <ArrowUpRight size={12} />
             Upgrade
           </button>
@@ -617,20 +617,5 @@
   }
   .tier-banner-text { flex: 1; line-height: 1.4; color: var(--fg); }
   .tier-banner-text strong { color: var(--fg); }
-  .btn-upgrade {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 4px 10px;
-    border-radius: var(--r-sm);
-    border: 1px solid var(--accent);
-    background: var(--accent);
-    color: white;
-    font-weight: 600;
-    font-size: var(--text-body-sm);
-    cursor: pointer;
-    white-space: nowrap;
-  }
-  .btn-upgrade:hover { filter: brightness(1.08); }
   .upgrade-action :global(svg) { stroke-width: 2; }
 </style>

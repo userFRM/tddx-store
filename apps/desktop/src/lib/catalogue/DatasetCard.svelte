@@ -109,7 +109,7 @@
       </button>
     {:else if gated && showUpgrade}
       <button
-        class="btn-upgrade"
+        class="btn btn-primary btn-sm"
         onclick={handleUpgrade}
         aria-label="Upgrade ThetaData subscription to access {dataset.title}"
       >
@@ -224,7 +224,7 @@
   /* Don't dim the locked indicator or the upgrade CTA — those are the
      actionable bits we want loud. */
   .card.gated :global(.tier-lock),
-  .card.gated :global(.btn-upgrade) {
+  .card.gated :global(.btn-sm) {
     opacity: 1;
     filter: none;
   }
@@ -357,24 +357,6 @@
   }
 
   /* Upgrade CTA replaces the Queue button when verdict.allowed=false. */
-  .btn-upgrade {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    height: 28px;
-    padding: 0 var(--sp-3);
-    border-radius: var(--r-sm);
-    border: 1px solid var(--accent);
-    background: var(--accent);
-    color: white;
-    font-size: var(--text-body-sm);
-    font-weight: var(--weight-semi);
-    cursor: pointer;
-    transition: filter var(--dur-fast) var(--ease-standard);
-  }
-  .btn-upgrade:hover { filter: brightness(1.08); }
-  .btn-upgrade:active { filter: brightness(0.95); }
   @media (prefers-reduced-motion: reduce) {
-    .btn-upgrade { transition: none; }
   }
 </style>

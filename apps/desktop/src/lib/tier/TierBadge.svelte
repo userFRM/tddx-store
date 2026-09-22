@@ -66,7 +66,7 @@
       </span>
     {/each}
     {#if showUpgrade}
-      <button class="upgrade-btn" onclick={handleUpgrade} title="Open ThetaData pricing page">
+      <button class="btn btn-primary btn-sm" onclick={handleUpgrade} title="Open ThetaData pricing page">
         <span>Upgrade</span>
         <ArrowUpRight size={11} />
       </button>
@@ -104,24 +104,6 @@
   /* Same reason as HomeView: the chip owns its ink, the label follows. */
   .pill .pill-label { color: inherit; opacity: 0.85; }
   .pill .pill-value { font-weight: 600; letter-spacing: 0.02em; }
-  .upgrade-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 2px 8px;
-    border-radius: 6px;
-    border: 1px solid var(--accent);
-    background: var(--accent);
-    color: var(--on-accent);
-    font-weight: 600;
-    cursor: pointer;
-    font-size: 11px;
-    line-height: 1;
-    transition: filter 120ms ease;
-  }
-  .upgrade-btn:hover { filter: brightness(1.08); }
-  .upgrade-btn:active { filter: brightness(0.95); }
   @media (prefers-reduced-motion: reduce) {
-    .upgrade-btn { transition: none; }
   }
 </style>
