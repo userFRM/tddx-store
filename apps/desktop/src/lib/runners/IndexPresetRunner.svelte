@@ -67,7 +67,7 @@
           start: start || null,
           end: end || null,
           date: !end ? (start || null) : null,
-          interval: "0",
+          interval: "tick",
           expiration: "*",
           strike: "*",
           right: "both",
@@ -178,7 +178,7 @@
 <style>
   .backdrop {
     position: fixed; inset: 0;
-    background: rgba(8,11,18,0.55);
+    background: var(--scrim);
     backdrop-filter: blur(4px);
     display: flex; align-items: center; justify-content: center;
     z-index: 90;

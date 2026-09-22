@@ -16,7 +16,7 @@ pub struct Coverage {
 }
 
 /// Path layout: `<root>/<kind>/<symbol>_<kind>_<YYYYMMDD>.<ext>`.
-pub fn dataset_path(root: &Path, kind: DataKind, symbol: &str, ymd: &str, ext: &str) -> PathBuf {
+pub fn dataset_path(root: &Path, kind: &DataKind, symbol: &str, ymd: &str, ext: &str) -> PathBuf {
     root.join(kind.as_str()).join(format!(
         "{}_{}_{}.{}",
         symbol.to_lowercase(),
@@ -61,7 +61,7 @@ pub fn scan(root: &Path) -> crate::Result<Vec<Coverage>> {
             // <symbol>_<kind...>_<YYYYMMDD>. Symbol = first underscore-segment.
             let symbol = parts[0].to_uppercase();
             let entry = out
-                .entry((kind, symbol))
+                .entry((kind.clone(), symbol))
                 .or_insert_with(|| (BTreeSet::new(), 0u64));
             entry.0.insert(d);
             entry.1 += f.metadata().map(|m| m.len()).unwrap_or(0);

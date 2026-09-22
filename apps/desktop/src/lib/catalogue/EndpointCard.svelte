@@ -157,6 +157,6 @@
   .run-btn:hover {
     background: var(--accent-tint);
     color: var(--accent-hi);
-    border-color: rgba(124,140,255,0.3);
+    border-color: var(--accent-ring);
   }
 </style>

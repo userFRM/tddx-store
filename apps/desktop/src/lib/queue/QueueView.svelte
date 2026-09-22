@@ -353,9 +353,9 @@
     border-color: var(--border-strong);
   }
   .filter-pill.active.filter-running { color: var(--accent-hi); border-color: var(--accent-tint); background: var(--accent-tint); }
-  .filter-pill.active.filter-done    { color: var(--good); border-color: rgba(93,212,160,0.2); background: rgba(93,212,160,0.08); }
-  .filter-pill.active.filter-failed  { color: var(--bad);  border-color: rgba(255,126,126,0.2); background: rgba(255,126,126,0.08); }
-  .filter-pill.active.filter-empty   { color: var(--warn); border-color: rgba(245,197,111,0.2); background: rgba(245,197,111,0.08); }
+  .filter-pill.active.filter-done    { color: var(--good); border-color: var(--good-tint); background: var(--good-tint); }
+  .filter-pill.active.filter-failed  { color: var(--bad);  border-color: var(--bad-tint); background: var(--bad-tint); }
+  .filter-pill.active.filter-empty   { color: var(--warn); border-color: var(--warn-tint); background: var(--warn-tint); }
 
   .filter-count {
     font-size: var(--text-caption);
@@ -386,7 +386,7 @@
   .task-row:hover { background: var(--surface-1); }
 
   .task-row.row-running {
-    background: rgba(124, 140, 255, 0.03);
+    background: var(--accent-tint-weak);
   }
 
   .task-status {

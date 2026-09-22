@@ -28,9 +28,9 @@
   let signingIn = $state(false);
   let saveMsg = $state("");
 
-  // No tier/worker math on the FE — the backend's `tier_status`
-  // command already normalizes Unknown→Free and supplies `workers`
-  // per class via `tdds_core::tier::Tier::workers`. We just render.
+  // No tier/concurrency math on the FE — `tier_status` already
+  // normalizes Unknown→Free and computes the account-wide budget.
+  // We just render.
 
   async function handleUpgrade() {
     const url = app.tierStatus?.upgrade_url;
@@ -39,12 +39,12 @@
   }
 
   /** One-line per-class summary for the Account card: e.g.
-   *  `Stocks Standard · Options Pro · Indices Free · Rates Free · 14 concurrent`. */
+   *  `Stocks Standard · Options Pro · Indices Free · Rates Free · 8 concurrent`. */
   const accountSummary = $derived.by<string>(() => {
     const t = app.tierStatus;
     if (!t) return "Connected to ThetaData";
     const parts = t.classes.map((c) => `${c.label} ${c.tier}`);
-    return `${parts.join(" · ")} · ${t.total_workers} concurrent`;
+    return `${parts.join(" · ")} · ${t.in_flight_budget} concurrent`;
   });
 
   onMount(async () => {
@@ -222,12 +222,11 @@
         <span class="hint fg-muted">One subdirectory per kind; one file per (symbol, date).</span>
       </label>
       <div class="field-stack">
-        <span class="text-caption">Parallel downloads (per asset class)</span>
+        <span class="text-caption">Subscription tier per asset class</span>
         <div class="conc-grid">
           {#each app.tierStatus?.classes ?? [] as row (row.class)}
             <div class="conc-row">
               <span class="conc-label">{row.label}</span>
-              <span class="conc-workers tabnum">{row.workers}</span>
               <span class="conc-tier fg-muted">{row.tier}</span>
               {#if !row.at_max}
                 <button
@@ -246,8 +245,9 @@
           {/each}
         </div>
         <span class="hint fg-muted">
-          Concurrency is fixed by your ThetaData subscription
-          (2<sup>tier</sup> per class). Free tier is granted to every
+          {app.tierStatus?.in_flight_budget ?? 1} downloads run at once.
+          ThetaData sizes that budget per account, not per asset class,
+          so it follows your highest tier. Free tier is granted to every
           account by default; upgrades take effect on the next queue run.
         </span>
       </div>
@@ -343,8 +343,8 @@
     gap: var(--sp-2);
     color: var(--bad);
     font-size: var(--text-body-sm);
-    background: rgba(255, 126, 126, 0.08);
-    border: 1px solid rgba(255, 126, 126, 0.25);
+    background: var(--bad-tint);
+    border: 1px solid var(--bad-tint);
     border-radius: var(--r-sm);
     padding: var(--sp-2) var(--sp-3);
   }
@@ -363,7 +363,7 @@
     width: 36px;
     height: 36px;
     border-radius: var(--r-sm);
-    background: rgba(93, 212, 160, 0.14);
+    background: var(--good-tint);
     color: var(--good);
     display: flex;
     align-items: center;
@@ -397,7 +397,7 @@
   }
   .conc-row {
     display: grid;
-    grid-template-columns: 1fr auto auto auto;
+    grid-template-columns: 1fr auto auto;
     gap: var(--sp-3);
     align-items: center;
     padding: 8px var(--sp-3);
@@ -405,13 +405,6 @@
   }
   .conc-row:first-child { border-top: 0; }
   .conc-label { color: var(--fg); font-size: var(--text-body-sm); }
-  .conc-workers {
-    color: var(--fg);
-    font-weight: var(--weight-semi);
-    font-family: var(--font-mono);
-    min-width: 1.5em;
-    text-align: right;
-  }
   .conc-tier {
     font-size: var(--text-caption);
     text-transform: uppercase;

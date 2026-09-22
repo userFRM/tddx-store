@@ -1,9 +1,9 @@
 //! Subscription-tier gating.
 //!
 //! ThetaData partitions historical access into four tiers per asset class
-//! (Free / Value / Standard / Pro). The Nexus auth response carries the
-//! customer's tier per asset class; `thetadatadx` exposes it as
-//! `SubscriptionInfo { stock, options }`. We map endpoint category +
+//! (Free / Value / Standard / Pro). The auth response carries the
+//! customer's tier per asset class; `thetadatadx` exposes all four on
+//! `SubscriptionInfo`. We map endpoint category +
 //! subcategory to a conservative minimum tier and expose a
 //! ranked-comparison gate plus a stable upgrade URL the UI links to when
 //! the user is below the bar.
@@ -84,15 +84,18 @@ impl Tier {
         self.rank() >= required.rank()
     }
 
-    /// Max in-flight requests the ThetaData FPSS server will accept for
-    /// this tier. The terminal documents the cap as `2^subscription_tier`
-    /// per asset class: Free=1, Value=2, Standard=4, Pro=8. We mirror
-    /// that 1:1 — going over makes the server queue requests internally
-    /// or drop them with a 429, both of which look like flaky downloads
-    /// on the client. `Unknown` falls back to 1 so a missing tier
-    /// (pre-connect, or a class the upstream SDK hasn't surfaced yet)
-    /// gracefully degrades to serial rather than spinning up phantom
-    /// workers that all queue behind one another.
+    /// Client-side estimate of how many historical requests ThetaData
+    /// processes at once: `2^tier` — Free=1, Value=2, Standard=4,
+    /// Pro=8. `Unknown` degrades to 1.
+    ///
+    /// Two things this is **not**. It is not a per-asset-class budget:
+    /// the server's limiter is account-wide, so a Pro-options,
+    /// Standard-stocks account does not get 8 + 4 lanes, it gets one
+    /// account-wide budget (see [`UserTiers::in_flight_budget`]). And
+    /// it is not a hard client cap: requests past the budget are
+    /// accepted, queued and paced server-side, and only overflow past
+    /// the server queue returns 429. Firing more than this buys
+    /// pacing, not parallelism, so the pool sizes to it and stops.
     pub const fn workers(self) -> usize {
         match self {
             Tier::Unknown | Tier::Free => 1,
@@ -103,11 +106,10 @@ impl Tier {
     }
 }
 
-/// Which Nexus asset-class pool a tick belongs to. Each class has its own
-/// server-side concurrency budget and its own per-class subscription
-/// tier, so the client must mirror that split: a Pro Options subscriber
-/// with a Standard Stocks subscription gets 8 option workers + 4 stock
-/// workers running simultaneously, not min/max/sum of the two.
+/// Which asset class an endpoint or tick belongs to. ThetaData sells a
+/// separate subscription per class, so the class decides which tier
+/// gates a dataset. It does **not** decide concurrency — that budget is
+/// account-wide ([`UserTiers::in_flight_budget`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AssetClass {
@@ -128,12 +130,9 @@ impl AssetClass {
     }
 }
 
-/// User's tier per asset class. ThetaData's Nexus auth response carries
-/// four independent subscription bytes (`stock_subscription`,
-/// `options_subscription`, `indices_subscription`,
-/// `interest_rate_subscription`). `thetadatadx` v10 only exposes the
-/// first two on `SubscriptionInfo`; the latter two are filled with
-/// `Tier::Unknown` until the upstream SDK surfaces accessor methods.
+/// User's tier per asset class, as the auth response reported it —
+/// `stock`, `options`, `indices`, `interest_rate`. A class the response
+/// omitted arrives as `Tier::Unknown`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct UserTiers {
     pub stock: Tier,
@@ -154,8 +153,7 @@ impl Default for UserTiers {
 }
 
 impl UserTiers {
-    /// Tier the user holds for `class`. Drives per-class worker
-    /// concurrency (see `Tier::workers`).
+    /// Tier the user holds for `class`. Drives dataset gating.
     pub fn for_class(&self, class: AssetClass) -> Tier {
         match class {
             AssetClass::Stock => self.stock,
@@ -165,9 +163,18 @@ impl UserTiers {
         }
     }
 
-    /// In-flight request budget granted by `class`'s tier.
-    pub fn workers_for(&self, class: AssetClass) -> usize {
-        self.for_class(class).workers()
+    /// The one in-flight request budget for the whole account.
+    ///
+    /// ThetaData's limiter is account-wide, not per class, so the
+    /// budget is the highest per-class `2^tier` the account holds —
+    /// never the sum. A Pro-options, Standard-stocks account downloads
+    /// 8 at a time in total, not 12.
+    pub fn in_flight_budget(&self) -> usize {
+        [self.stock, self.options, self.indices, self.interest_rate]
+            .into_iter()
+            .map(Tier::workers)
+            .max()
+            .unwrap_or(1)
     }
 }
 

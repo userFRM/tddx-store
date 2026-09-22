@@ -247,7 +247,7 @@
 <style>
   .backdrop {
     position: fixed; inset: 0;
-    background: rgba(8, 11, 18, 0.55);
+    background: var(--scrim);
     backdrop-filter: blur(6px);
     display: flex; align-items: flex-start; justify-content: center;
     padding-top: 12vh;

@@ -23,6 +23,7 @@
     refreshTierStatus,
     log,
   } from "$lib/stores/app.svelte";
+  import ThetaDataLogo from "$lib/brand/ThetaDataLogo.svelte";
   import { api, TAURI_AVAILABLE } from "$lib/api";
   import { vault } from "$lib/persistence/vault";
 
@@ -107,12 +108,7 @@
   <div class="gate-backdrop">
     <div class="gate">
       <div class="brand-row">
-        <img
-          class="brand-logo"
-          src="/thetadata-logo.svg"
-          alt="ThetaData"
-          draggable="false"
-        />
+        <span class="brand-logo"><ThetaDataLogo height={28} /></span>
         <span class="brand-name">Store</span>
       </div>
       <h1 class="gate-title">Sign in to ThetaData</h1>
@@ -231,9 +227,9 @@
     margin-bottom: var(--sp-2);
   }
   .brand-logo {
-    height: 28px;
-    width: auto;
     display: block;
+    /* The wordmark's second half inherits this colour. */
+    color: var(--fg-muted);
     -webkit-user-select: none;
     user-select: none;
   }
@@ -293,13 +289,13 @@
   }
   .gate-error {
     color: var(--bad);
-    background: rgba(255, 126, 126, 0.08);
-    border: 1px solid rgba(255, 126, 126, 0.25);
+    background: var(--bad-tint);
+    border: 1px solid var(--bad-tint);
   }
   .gate-warn {
     color: var(--warn);
-    background: rgba(245, 197, 111, 0.08);
-    border: 1px solid rgba(245, 197, 111, 0.25);
+    background: var(--warn-tint);
+    border: 1px solid var(--warn-tint);
   }
   .gate-warn code {
     font-family: var(--font-mono);

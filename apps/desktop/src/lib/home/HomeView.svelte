@@ -455,7 +455,7 @@
     gap: var(--sp-1);
     padding: 3px var(--sp-3);
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
     border: none;
     border-radius: var(--r-pill);
     font-size: var(--text-caption);
@@ -519,10 +519,6 @@
 
   /* Tier color variants — match KindGrid pill palette */
   .tier-unknown  { background: var(--surface-2);                     color: var(--fg-subtle);      border-color: var(--border); }
-  .tier-free     { background: rgba(92, 101, 119, 0.15);             color: var(--fg-muted);       }
-  .tier-value    { background: rgba(56, 132, 255, 0.10);             color: rgb(56, 132, 255);     border-color: rgba(56, 132, 255, 0.20); }
-  .tier-standard { background: rgba(34, 175, 109, 0.12);             color: rgb(34, 175, 109);     border-color: rgba(34, 175, 109, 0.22); }
-  .tier-pro      { background: rgba(244, 196, 48, 0.14);             color: rgb(212, 158, 0);      border-color: rgba(244, 196, 48, 0.30); }
 
   /* ── Section shared ─────────────────────────────────────────── */
   .section-header {

@@ -15,10 +15,11 @@ use tdds_core::{all_endpoints, tier_evaluate, Tier, TierVerdict, UserTiers, UPGR
 use crate::state::AppState;
 
 /// Per-class tier slice. Single source of truth for the FE — name,
-/// label, tier, worker count, and "at max" flag are all derived
-/// server-side from `tdds_core::tier`. The FE iterates `classes` and
-/// never recomputes any of these, so a change to `Tier::workers()` or
-/// the asset-class set propagates automatically.
+/// label, tier and "at max" flag are all derived server-side from
+/// `tdds_core::tier`. The FE iterates `classes` and never recomputes
+/// any of these, so a change to the asset-class set propagates
+/// automatically. Concurrency is deliberately absent here: it is one
+/// account-wide number, not a per-class one.
 #[derive(Serialize)]
 pub struct ClassTier {
     /// Wire name: `stock` | `option` | `index` | `rate`.
@@ -31,7 +32,6 @@ pub struct ClassTier {
     /// "the SDK didn't surface a purchased byte"). Pre-connect the
     /// raw `Unknown` is preserved so the UI can render "—".
     pub tier: String,
-    pub workers: u32,
     /// True when this class is at the highest tier (Pro). UI uses
     /// this to hide the per-class upgrade affordance.
     pub at_max: bool,
@@ -44,12 +44,12 @@ pub struct TierStatus {
     pub indices: String,
     pub interest_rate: String,
     /// Iterable per-class view. Replaces every FE-side hardcoded
-    /// `[Stocks, Options, Indices, Rates]` list and every `2^tier`
-    /// duplicate of `Tier::workers()`.
+    /// `[Stocks, Options, Indices, Rates]` list.
     pub classes: Vec<ClassTier>,
-    /// Sum of `classes[*].workers` — the total parallel-download
-    /// budget the user's subscription unlocks across every asset class.
-    pub total_workers: u32,
+    /// How many downloads run at once, for the whole account. See
+    /// `UserTiers::in_flight_budget` — this is the highest per-class
+    /// `2^tier` the account holds, never the sum.
+    pub in_flight_budget: u32,
     pub upgrade_url: &'static str,
     /// `false` until the user is connected — UI should treat this the
     /// same as all tiers being `Unknown` (most-restrictive view).
@@ -79,8 +79,18 @@ fn class_row(class: AssetClass, label: &'static str, raw: Tier, connected: bool)
         class: class.as_str().to_string(),
         label,
         tier: tier_label(t),
-        workers: t.workers() as u32,
         at_max: matches!(t, Tier::Pro),
+    }
+}
+
+/// `UserTiers` with the same Unknown→Free policy `class_row` applies,
+/// so the advertised budget matches the tiers rendered next to it.
+fn normalized_tiers(t: &UserTiers, connected: bool) -> UserTiers {
+    UserTiers {
+        stock: normalize(t.stock, connected),
+        options: normalize(t.options, connected),
+        indices: normalize(t.indices, connected),
+        interest_rate: normalize(t.interest_rate, connected),
     }
 }
 
@@ -97,20 +107,19 @@ pub async fn tier_status(state: State<'_, Arc<AppState>>) -> Result<TierStatus, 
         class_row(AssetClass::Index, "Indices", tiers.indices, connected),
         class_row(AssetClass::Rate, "Rates", tiers.interest_rate, connected),
     ];
-    let total_workers = classes.iter().map(|c| c.workers).sum();
     Ok(TierStatus {
         stock: classes[0].tier.clone(),
         options: classes[1].tier.clone(),
         indices: classes[2].tier.clone(),
         interest_rate: classes[3].tier.clone(),
         classes,
-        total_workers,
+        in_flight_budget: normalized_tiers(&tiers, connected).in_flight_budget() as u32,
         upgrade_url: UPGRADE_URL,
         connected,
     })
 }
 
-/// Per-endpoint tier verdict for all 61 registered endpoints. Frontend
+/// Per-endpoint tier verdict for every registered endpoint. Frontend
 /// uses this to render an "Available on your tier" badge per dataset
 /// card and to disable the queue button when not allowed.
 #[tauri::command]

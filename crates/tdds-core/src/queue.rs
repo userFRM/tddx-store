@@ -12,7 +12,6 @@ use std::str::FromStr;
 use crate::config::SQLITE_POOL_SIZE;
 use crate::format::OutputFormat;
 use crate::spec::{DataKind, DataSpec};
-use crate::tier::AssetClass;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(rename_all = "lowercase")]
@@ -214,60 +213,6 @@ impl Queue {
         .bind(now)
         .fetch_optional(&self.pool)
         .await?;
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        row.try_into().map(Some)
-    }
-
-    /// Atomic claim restricted to one asset class. Used by the
-    /// per-class worker pools so a Pro-Options run can't starve
-    /// Standard-Stocks workers (and vice versa) — each class drains
-    /// at its own server-permitted concurrency.
-    ///
-    /// Index/Rate classes have no `DataKind` variants today, so they
-    /// short-circuit to `None` rather than burning a SQL round-trip.
-    pub async fn claim_next_by_class(&self, class: AssetClass) -> crate::Result<Option<Task>> {
-        let kinds: &[&str] = match class {
-            AssetClass::Stock => &["stock_trade", "stock_quote", "stock_trade_quote"],
-            AssetClass::Option => &[
-                "option_trade",
-                "option_quote",
-                "option_trade_quote",
-                "option_oi",
-            ],
-            AssetClass::Index | AssetClass::Rate => return Ok(None),
-        };
-        let now = Utc::now().timestamp();
-        let placeholders = vec!["?"; kinds.len()].join(",");
-        let sql = format!(
-            r#"
-            UPDATE tasks
-               SET status = 'running',
-                   attempts = attempts + 1,
-                   claimed_by = ?,
-                   claimed_at = ?,
-                   last_heartbeat_at = ?,
-                   finished_at = NULL
-             WHERE id = (
-                 SELECT id FROM tasks
-                  WHERE status = 'pending'
-                    AND kind IN ({placeholders})
-                  ORDER BY priority DESC, created_at ASC
-                  LIMIT 1
-             )
-               AND status = 'pending'
-            RETURNING *
-            "#
-        );
-        let mut q = sqlx::query_as::<_, TaskRow>(&sql)
-            .bind(&self.owner_id)
-            .bind(now)
-            .bind(now);
-        for k in kinds {
-            q = q.bind(*k);
-        }
-        let row: Option<TaskRow> = q.fetch_optional(&self.pool).await?;
         let Some(row) = row else {
             return Ok(None);
         };
@@ -551,7 +496,7 @@ mod tests {
 
     fn sample_spec() -> DataSpec {
         DataSpec {
-            kind: DataKind::StockTrade,
+            kind: DataKind::parse("stock_history_trade").expect("registry knows the dataset"),
             symbol: "AAPL".into(),
             date: NaiveDate::from_ymd_opt(2024, 1, 2).unwrap(),
             interval: None,

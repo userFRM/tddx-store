@@ -110,7 +110,7 @@ button { font-family: inherit; cursor: pointer; }
 
 .btn-primary {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-weight: var(--weight-semi);
 }
 .btn-primary:hover  { background: var(--accent-hi); }
@@ -201,11 +201,23 @@ input::placeholder { color: var(--fg-subtle); }
   text-transform: uppercase;
   white-space: nowrap;
 }
-.pill-pending  { background: rgba(92, 101, 119, 0.18); color: var(--fg-muted); }
-.pill-running  { background: rgba(124, 140, 255, 0.18); color: var(--accent-hi); }
-.pill-done     { background: rgba(93, 212, 160, 0.15); color: var(--good); }
-.pill-failed   { background: rgba(255, 126, 126, 0.15); color: var(--bad); }
-.pill-empty    { background: rgba(245, 197, 111, 0.15); color: var(--warn); }
+.pill-pending  { background: var(--neutral-tint); color: var(--fg-muted); }
+.pill-running  { background: var(--accent-tint-strong); color: var(--accent-hi); }
+.pill-done     { background: var(--good-tint); color: var(--good); }
+.pill-failed   { background: var(--bad-tint); color: var(--bad); }
+.pill-empty    { background: var(--warn-tint); color: var(--warn); }
+
+/* ── Subscription-tier pills ────────────────────────────────── */
+/* One definition for every surface that renders a tier. Colours come
+   from the `--tier-*` tokens so the two themes stay in step, and the
+   rule is global so a component only has to apply the class. Five
+   components used to carry their own copy of this block. */
+.tier-free     { background: var(--tier-free-bg);     color: var(--tier-free-fg);     border-color: var(--tier-free-border); }
+.tier-value    { background: var(--tier-value-bg);    color: var(--tier-value-fg);    border-color: var(--tier-value-border); }
+.tier-standard { background: var(--tier-standard-bg); color: var(--tier-standard-fg); border-color: var(--tier-standard-border); }
+.tier-pro      { background: var(--tier-pro-bg);      color: var(--tier-pro-fg);      border-color: var(--tier-pro-border); }
+.tier-unknown  { background: var(--tier-free-bg);     color: var(--tier-free-fg);     border-color: var(--tier-free-border); }
+
 
 .pill-dot {
   width: 6px;

@@ -62,7 +62,7 @@ pub async fn enqueue(state: State<'_, Arc<AppState>>, args: EnqueueArgs) -> Resu
     let priority = args.priority.unwrap_or(0);
     for d in &dates {
         let spec = DataSpec {
-            kind,
+            kind: kind.clone(),
             symbol: args.symbol.clone(),
             date: *d,
             interval: args.interval.clone(),

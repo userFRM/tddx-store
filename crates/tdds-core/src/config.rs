@@ -2,11 +2,11 @@
 //! (pool size, retry sleep, schedule cooldown, polling intervals). One
 //! place to change them, one place to grep for "what's the default".
 
-/// SQLite pool size for the queue DB. Sized above the absolute worst-case
-/// worker count (Pro stock + Pro option = 8 + 8 = 16) so polling commands
-/// (snapshot, schedule_list) can always grab a connection while every
-/// worker is mid-`claim_next_by_class`. Without this the pool saturates
-/// under load and snapshots queue forever.
+/// SQLite pool size for the queue DB. Sized above the worst-case worker
+/// count (Pro = 8 in flight) so polling commands (snapshot,
+/// schedule_list) can always grab a connection while every worker is
+/// mid-`claim_next`. Without this the pool saturates under load and
+/// snapshots queue forever.
 pub const SQLITE_POOL_SIZE: u32 = 20;
 
 /// Backoff sleep after a `claim_next` SQL error. Workers retry until

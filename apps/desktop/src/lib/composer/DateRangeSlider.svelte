@@ -298,7 +298,7 @@
     border-radius: 50%;
     cursor: grab;
     padding: 0;
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow-raised);
     transition: transform var(--dur-fast) var(--ease-standard),
                 box-shadow var(--dur-fast) var(--ease-standard);
   }
@@ -307,7 +307,7 @@
   }
   .dr-handle:focus-visible {
     outline: none;
-    box-shadow: var(--shadow-glow-accent), 0 1px 4px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow-glow-accent), var(--shadow-raised);
   }
   .dr-handle.dragging {
     cursor: grabbing;

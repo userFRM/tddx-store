@@ -18,6 +18,7 @@
     Monitor,
   } from "lucide-svelte";
 
+  import ThetaDataLogo from "$lib/brand/ThetaDataLogo.svelte";
   import HomeView from "$lib/home/HomeView.svelte";
   import BrowseView from "$lib/catalogue/BrowseView.svelte";
   import LibraryView from "$lib/queue/LibraryView.svelte";
@@ -125,12 +126,7 @@
   <!-- ── Top bar ──────────────────────────────────────────── -->
   <header class="topbar" data-tauri-drag-region>
     <div class="brand" data-tauri-drag-region>
-      <img
-        class="brand-logo"
-        src="/thetadata-logo.svg"
-        alt="ThetaData"
-        draggable="false"
-      />
+      <span class="brand-logo"><ThetaDataLogo height={22} /></span>
       <span class="brand-name">Store</span>
       <span class="brand-tag text-caption">v{APP_VERSION}</span>
     </div>
@@ -302,9 +298,9 @@
     gap: var(--sp-2);
   }
   .brand-logo {
-    height: 22px;
-    width: auto;
     display: block;
+    /* The wordmark's second half inherits this colour. */
+    color: var(--fg-muted);
     -webkit-user-select: none;
     user-select: none;
   }
@@ -395,11 +391,11 @@
   }
   .conn-indicator.connected {
     color: var(--good);
-    border-color: rgba(93, 212, 160, 0.3);
+    border-color: var(--good-tint);
   }
   .conn-indicator.error {
     color: var(--bad);
-    border-color: rgba(255, 126, 126, 0.3);
+    border-color: var(--bad-tint);
   }
   .conn-label {
     color: inherit;
@@ -461,7 +457,7 @@
     margin-left: auto;
     font-size: var(--text-caption);
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
     padding: 1px 6px;
     border-radius: var(--r-pill);
     font-weight: var(--weight-semi);

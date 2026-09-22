@@ -82,10 +82,7 @@
           <span class="d">/ {snap.pool_size}</span>
         </div>
         <div class="hint fg-muted">
-          {snap.pool_active ? "active" : "idle"} ·
-          stock {snap.pool_per_class.stock} · option {snap.pool_per_class.option}
-          {#if snap.pool_per_class.index > 0} · index {snap.pool_per_class.index}{/if}
-          {#if snap.pool_per_class.rate  > 0} · rate {snap.pool_per_class.rate}{/if}
+          {snap.pool_active ? "active" : "idle"} · account-wide budget
         </div>
       </div>
 
@@ -128,10 +125,6 @@
             <span class="ver-name">thetadatadx</span>
             <code>{snap.thetadatadx_version}</code>
           </div>
-          <div class="ver-row">
-            <span class="ver-name">tdbe</span>
-            <code>{snap.tdbe_version}</code>
-          </div>
         </div>
       </div>
     </div>
@@ -157,8 +150,8 @@
   .error-card {
     display: inline-flex; align-items: center; gap: 6px;
     padding: var(--sp-3) var(--sp-4);
-    border: 1px solid rgba(255,126,126,0.3);
-    background: rgba(255,126,126,0.06);
+    border: 1px solid var(--bad-tint);
+    background: var(--bad-tint);
     color: var(--bad);
     border-radius: var(--r-sm);
   }

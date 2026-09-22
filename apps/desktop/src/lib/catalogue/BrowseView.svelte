@@ -32,7 +32,7 @@
   let kindId     = $state("");
   let start      = $state("");
   let end        = $state("");
-  let interval   = $state("0");
+  let interval   = $state("tick");
   let format     = $state<"parquet" | "csv" | "jsonl" | "json">("parquet");
 
   // Shared param values map — written to by SmartFilters and ParamForm
@@ -228,7 +228,7 @@
           kind: kindId,
           symbol,
           format,
-          interval: interval || "0",
+          interval: interval || "tick",
           start: start || null,
           end: end || null,
           expiration: isOption ? (paramValues["expiration"] ?? null) : null,
@@ -279,7 +279,7 @@
           kind: twin,
           symbol,
           format,
-          interval: interval || "0",
+          interval: interval || "tick",
           start: start || null,
           end: end || null,
           expiration: isOption ? (paramValues["expiration"] ?? "*") : null,
@@ -744,7 +744,7 @@
   .recommended-tag {
     padding: 1px 6px;
     border-radius: var(--r-pill);
-    background: rgba(93, 212, 160, 0.15);
+    background: var(--good-tint);
     color: var(--good);
     font-size: 10px;
     font-weight: var(--weight-semi);

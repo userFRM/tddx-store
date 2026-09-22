@@ -232,10 +232,10 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
-  .tag-added   { background: rgba(93,212,160,0.18); color: var(--good); }
+  .tag-added   { background: var(--good-tint); color: var(--good); }
   .tag-grew    { background: var(--accent-tint); color: var(--accent-hi); }
-  .tag-shrunk  { background: rgba(245,197,111,0.18); color: var(--warn); }
-  .tag-removed { background: rgba(255,126,126,0.18); color: var(--bad); }
+  .tag-shrunk  { background: var(--warn-tint); color: var(--warn); }
+  .tag-removed { background: var(--bad-tint); color: var(--bad); }
 
   .empty { padding: var(--sp-4); text-align: center; }
 </style>

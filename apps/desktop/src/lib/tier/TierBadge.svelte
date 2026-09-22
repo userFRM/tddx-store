@@ -31,11 +31,14 @@
     rate: "Rates",
   };
 
+  /** The `tier-*` half is the app-wide pill palette in `app.css`; the
+   *  `pill` half is this badge's own layout. */
   function tierClass(tier: TierName): string {
-    if (tier === "Pro") return "pill pro";
-    if (tier === "Standard") return "pill standard";
-    if (tier === "Value") return "pill value";
-    return "pill free";
+    if (tier === "Pro") return "pill tier-pro";
+    if (tier === "Standard") return "pill tier-standard";
+    if (tier === "Value") return "pill tier-value";
+    if (tier === "Free") return "pill tier-free";
+    return "pill tier-unknown";
   }
 
   async function handleUpgrade() {
@@ -100,20 +103,15 @@
   }
   .pill .pill-label { color: var(--muted); }
   .pill .pill-value { font-weight: 600; letter-spacing: 0.02em; }
-  .pill.unknown { background: var(--surface-2); color: var(--muted); }
-  .pill.free    { background: rgba(120, 120, 120, 0.10); color: var(--text-secondary, var(--muted)); }
-  .pill.value   { background: rgba(56, 132, 255, 0.10); color: rgb(56, 132, 255); border-color: rgba(56, 132, 255, 0.20); }
-  .pill.standard{ background: rgba(34, 175, 109, 0.12); color: rgb(34, 175, 109); border-color: rgba(34, 175, 109, 0.22); }
-  .pill.pro     { background: rgba(244, 196, 48, 0.14); color: rgb(212, 158, 0);  border-color: rgba(244, 196, 48, 0.30); }
   .upgrade-btn {
     display: inline-flex;
     align-items: center;
     gap: 4px;
     padding: 2px 8px;
     border-radius: 6px;
-    border: 1px solid var(--accent, rgb(56, 132, 255));
-    background: var(--accent, rgb(56, 132, 255));
-    color: white;
+    border: 1px solid var(--accent);
+    background: var(--accent);
+    color: var(--on-accent);
     font-weight: 600;
     cursor: pointer;
     font-size: 11px;

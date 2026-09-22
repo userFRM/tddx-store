@@ -254,7 +254,7 @@
   .filter-pill.active {
     background: var(--accent-tint);
     color: var(--accent-hi);
-    border-color: rgba(124, 140, 255, 0.4);
+    border-color: var(--accent-ring);
   }
   .filter-count {
     font-family: var(--font-mono);
@@ -318,7 +318,7 @@
   .row-btn:hover {
     background: var(--accent-tint);
     color: var(--accent-hi);
-    border-color: rgba(124,140,255,0.3);
+    border-color: var(--accent-ring);
   }
 
   .empty {

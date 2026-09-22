@@ -430,7 +430,7 @@
   .composer-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(8, 11, 18, 0.55);
+    background: var(--scrim);
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
     display: flex;
@@ -591,7 +591,7 @@
     font-size: 11px;
     cursor: pointer;
   }
-  .row-btn:hover { background: var(--accent-tint); color: var(--accent-hi); border-color: rgba(124,140,255,0.3); }
+  .row-btn:hover { background: var(--accent-tint); color: var(--accent-hi); border-color: var(--accent-ring); }
   .row-btn.ghost { background: transparent; }
   .hint code {
     font-family: var(--font-mono);
@@ -608,10 +608,10 @@
     gap: 10px;
     margin: 0 var(--sp-5);
     padding: 10px 12px;
-    background: rgba(244, 196, 48, 0.10);
-    border: 1px solid rgba(244, 196, 48, 0.32);
+    background: var(--warn-tint);
+    border: 1px solid var(--warn-tint);
     border-radius: var(--r-md);
-    color: rgb(212, 158, 0);
+    color: var(--warn);
     font-size: var(--text-body-sm);
   }
   .tier-banner-text { flex: 1; line-height: 1.4; color: var(--fg); }
@@ -622,8 +622,8 @@
     gap: 4px;
     padding: 4px 10px;
     border-radius: var(--r-sm);
-    border: 1px solid var(--accent, rgb(56, 132, 255));
-    background: var(--accent, rgb(56, 132, 255));
+    border: 1px solid var(--accent);
+    background: var(--accent);
     color: white;
     font-weight: 600;
     font-size: var(--text-body-sm);

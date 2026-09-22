@@ -1,5 +1,5 @@
-//! Generic endpoint dispatch surface — covers all 61 thetadatadx
-//! endpoints via the registry. List endpoints get a JSON-friendly
+//! Generic endpoint dispatch surface — covers every endpoint in the
+//! SDK registry. List endpoints get a JSON-friendly
 //! `Vec<String>` return; everything else writes a tick batch to disk.
 
 use std::sync::Arc;
@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 use tdds_core::{
     all_endpoints, dispatch_to_file, endpoint_catalogue, endpoint_meta, find_endpoint,
-    format::OutputFormat, EndpointInfo, EndpointMeta, EndpointSpec,
+    format::OutputFormat, EndpointInfo, EndpointMeta, EndpointSpec, IntervalOption, INTERVALS,
 };
 
 use crate::state::AppState;
@@ -21,6 +21,14 @@ pub async fn endpoints_list() -> Result<Vec<EndpointInfo>, String> {
 #[tauri::command]
 pub async fn endpoints_get(name: String) -> Result<Option<EndpointInfo>, String> {
     Ok(find_endpoint(&name))
+}
+
+/// The sampling intervals the interval-taking endpoints accept, in
+/// ascending order. The picker renders this rather than carrying its
+/// own list, so it can never offer a value the endpoint rejects.
+#[tauri::command]
+pub fn interval_options() -> Vec<IntervalOption> {
+    INTERVALS.to_vec()
 }
 
 #[derive(Deserialize)]

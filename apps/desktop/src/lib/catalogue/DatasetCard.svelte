@@ -299,7 +299,7 @@
     color: var(--accent-hi);
     font-size: var(--text-body-sm);
     font-weight: var(--weight-medium);
-    border: 1px solid rgba(124, 140, 255, 0.2);
+    border: 1px solid var(--accent-ring);
     cursor: default;
   }
 
@@ -322,9 +322,9 @@
     gap: 3px;
     padding: 2px 6px;
     border-radius: 999px;
-    background: rgba(244, 196, 48, 0.14);
-    color: rgb(212, 158, 0);
-    border: 1px solid rgba(244, 196, 48, 0.32);
+    background: var(--warn-tint);
+    color: var(--warn);
+    border: 1px solid var(--warn-tint);
     font-size: 10px;
     font-weight: 600;
     letter-spacing: 0.04em;
@@ -339,8 +339,8 @@
     height: 28px;
     padding: 0 var(--sp-3);
     border-radius: var(--r-sm);
-    border: 1px solid var(--accent, rgb(56, 132, 255));
-    background: var(--accent, rgb(56, 132, 255));
+    border: 1px solid var(--accent);
+    background: var(--accent);
     color: white;
     font-size: var(--text-body-sm);
     font-weight: var(--weight-semi);

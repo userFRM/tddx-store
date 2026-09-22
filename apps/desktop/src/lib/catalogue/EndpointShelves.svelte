@@ -118,7 +118,7 @@
     border-radius: var(--r-md);
     background: var(--surface-1);
   }
-  .state.error { color: var(--bad); border-color: rgba(255,126,126,0.3); }
+  .state.error { color: var(--bad); border-color: var(--bad-tint); }
 
   .cat {
     display: flex;

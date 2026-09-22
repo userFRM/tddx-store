@@ -7,7 +7,6 @@ build = "build.rs"
 
 [dependencies]
 thetadatadx.workspace = true
-tdbe.workspace = true
 rustls.workspace = true
 tokio.workspace = true
 chrono.workspace = true

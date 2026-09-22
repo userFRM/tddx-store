@@ -646,7 +646,7 @@
     height: 30px;
     padding: 0 var(--sp-4);
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
     border: none;
     border-radius: var(--r-sm);
     font-size: var(--text-body-sm);

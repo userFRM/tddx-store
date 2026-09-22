@@ -7,12 +7,12 @@
    */
   import { X, Loader2, FileArchive, Play } from "lucide-svelte";
   import { app, log } from "$lib/stores/app.svelte";
-  import { api } from "$lib/api";
+  import { api, type FlatfileReqType, type FlatfileSecType } from "$lib/api";
 
   type FF = {
     title: string;
-    sec: "STOCK" | "OPTION";
-    req: string;
+    sec: FlatfileSecType;
+    req: FlatfileReqType;
     desc: string;
   };
 
@@ -35,13 +35,13 @@
     if (!app.flatfileRunnerOpen || !ff) return;
     // Suggest a sensible default output path under settings.output_dir.
     if (!outputPath && date && app.settings.output_dir) {
-      outputPath = `${app.settings.output_dir}/_flatfiles/${ff.sec.toLowerCase()}_${ff.req.toLowerCase()}_${date}.${format.toLowerCase()}`;
+      outputPath = `${app.settings.output_dir}/_flatfiles/${ff.sec.toLowerCase()}_${ff.req}_${date}.${format.toLowerCase()}`;
     }
   });
 
   $effect(() => {
     if (!ff || !date || !app.settings.output_dir) return;
-    outputPath = `${app.settings.output_dir}/_flatfiles/${ff.sec.toLowerCase()}_${ff.req.toLowerCase()}_${date}.${format.toLowerCase()}`;
+    outputPath = `${app.settings.output_dir}/_flatfiles/${ff.sec.toLowerCase()}_${ff.req}_${date}.${format.toLowerCase()}`;
   });
 
   async function run() {
@@ -52,7 +52,7 @@
     try {
       const path = await api.flatfileDownload({
         sec_type: ff.sec,
-        req_type: ff.req as "TRADE" | "QUOTE" | "TRADE_QUOTE" | "OPEN_INTEREST" | "OHLC" | "EOD",
+        req_type: ff.req,
         date,
         output_path: outputPath,
         format,
@@ -121,7 +121,7 @@
 <style>
   .backdrop {
     position: fixed; inset: 0;
-    background: rgba(8,11,18,0.55);
+    background: var(--scrim);
     backdrop-filter: blur(4px);
     display: flex; align-items: center; justify-content: center;
     z-index: 90;

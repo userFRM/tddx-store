@@ -364,7 +364,7 @@
   .add-btn-divider {
     width: 1px;
     height: 14px;
-    background: rgba(10, 12, 20, 0.35);
+    background: var(--scrim);
     margin: 0 var(--sp-1);
   }
 

@@ -1,7 +1,7 @@
 //! Generic endpoint dispatch + registry exposure.
 //!
 //! Wraps `thetadatadx::invoke_endpoint` and `EndpointArgs` so the rest of
-//! tdds-core can drive every one of the 61 historical / snapshot /
+//! tdds-core can drive every historical / snapshot /
 //! list / at_time / greeks endpoints from a single `EndpointSpec` value.
 //!
 //! `dispatch_to_arrow` returns the Arrow `RecordBatch` (or empty) so the
@@ -10,7 +10,6 @@
 use std::path::Path;
 
 use arrow_array::RecordBatch;
-use thetadatadx::frames::TicksArrowExt;
 use thetadatadx::{
     by_category, endpoint::invoke_endpoint, find, EndpointArgs, EndpointMeta, EndpointOutput,
     ENDPOINTS,
@@ -127,6 +126,16 @@ pub async fn dispatch_raw(client: &Client, spec: &EndpointSpec) -> crate::Result
     }
     for p in meta.params {
         if let Some(raw) = spec.args.get(p.name) {
+            // `interval` is the one argument whose accepted spelling
+            // changed with the v3 API (`0` → `tick`, `60s` → `1m`, …).
+            // Normalizing here covers every caller — the worker, the
+            // endpoint runner, list queries and schedules — so no
+            // stored spec needs migrating.
+            let raw = if p.name == "interval" {
+                &crate::spec::normalize_interval(raw)
+            } else {
+                raw
+            };
             args.insert_raw(p.name, p.param_type, raw)
                 .map_err(|e| crate::Error::Other(format!("arg {}: {}", p.name, e)))?;
         } else if p.required {
@@ -136,32 +145,45 @@ pub async fn dispatch_raw(client: &Client, spec: &EndpointSpec) -> crate::Result
             )));
         }
     }
-    invoke_endpoint(client.raw(), &spec.endpoint, &args)
+    invoke_endpoint(client.market_data(), &spec.endpoint, &args)
         .await
         .map_err(|e| crate::Error::Other(format!("invoke {}: {:?}", spec.endpoint, e)))
 }
 
 /// Convert any `EndpointOutput` variant that carries tick data into a
 /// `RecordBatch`. `StringList` and similar non-tick outputs return `None`.
+///
+/// Every arm goes through `Ticks::to_arrow`, which projects to the columns
+/// the response actually carried. The slice-level `TicksArrowExt::to_arrow`
+/// emits the tick type's full schema instead, so an equity response would
+/// gain always-null contract-identity columns and a gRPC trade response
+/// would gain four always-zero flag columns that the wire never sent.
 pub fn arrow_from_output(out: &EndpointOutput) -> Option<RecordBatch> {
     use EndpointOutput::*;
     match out {
         StringList(_) => None,
-        EodTicks(v) => v.as_slice().to_arrow().ok(),
-        OhlcTicks(v) => v.as_slice().to_arrow().ok(),
-        TradeTicks(v) => v.as_slice().to_arrow().ok(),
-        QuoteTicks(v) => v.as_slice().to_arrow().ok(),
-        TradeQuoteTicks(v) => v.as_slice().to_arrow().ok(),
-        OpenInterestTicks(v) => v.as_slice().to_arrow().ok(),
-        MarketValueTicks(v) => v.as_slice().to_arrow().ok(),
-        GreeksAllTicks(v) => v.as_slice().to_arrow().ok(),
-        GreeksFirstOrderTicks(v) => v.as_slice().to_arrow().ok(),
-        GreeksSecondOrderTicks(v) => v.as_slice().to_arrow().ok(),
-        GreeksThirdOrderTicks(v) => v.as_slice().to_arrow().ok(),
-        IvTicks(v) => v.as_slice().to_arrow().ok(),
-        PriceTicks(v) => v.as_slice().to_arrow().ok(),
-        CalendarDays(v) => v.as_slice().to_arrow().ok(),
-        InterestRateTicks(v) => v.as_slice().to_arrow().ok(),
-        OptionContracts(v) => v.as_slice().to_arrow().ok(),
+        EodTicks(v) => v.to_arrow().ok(),
+        OhlcTicks(v) => v.to_arrow().ok(),
+        TradeTicks(v) => v.to_arrow().ok(),
+        QuoteTicks(v) => v.to_arrow().ok(),
+        TradeQuoteTicks(v) => v.to_arrow().ok(),
+        OpenInterestTicks(v) => v.to_arrow().ok(),
+        MarketValueTicks(v) => v.to_arrow().ok(),
+        GreeksAllTicks(v) => v.to_arrow().ok(),
+        GreeksEodTicks(v) => v.to_arrow().ok(),
+        GreeksFirstOrderTicks(v) => v.to_arrow().ok(),
+        GreeksSecondOrderTicks(v) => v.to_arrow().ok(),
+        GreeksThirdOrderTicks(v) => v.to_arrow().ok(),
+        TradeGreeksAllTicks(v) => v.to_arrow().ok(),
+        TradeGreeksFirstOrderTicks(v) => v.to_arrow().ok(),
+        TradeGreeksSecondOrderTicks(v) => v.to_arrow().ok(),
+        TradeGreeksThirdOrderTicks(v) => v.to_arrow().ok(),
+        TradeGreeksImpliedVolatilityTicks(v) => v.to_arrow().ok(),
+        IvTicks(v) => v.to_arrow().ok(),
+        PriceTicks(v) => v.to_arrow().ok(),
+        IndexPriceAtTimeTicks(v) => v.to_arrow().ok(),
+        CalendarDays(v) => v.to_arrow().ok(),
+        InterestRateTicks(v) => v.to_arrow().ok(),
+        OptionContracts(v) => v.to_arrow().ok(),
     }
 }

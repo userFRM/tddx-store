@@ -259,7 +259,7 @@
     padding: 1px 6px;
   }
   .chip.active .chip-count {
-    background: rgba(255, 255, 255, 0.18);
+    background: var(--on-accent-veil);
     color: inherit;
   }
 

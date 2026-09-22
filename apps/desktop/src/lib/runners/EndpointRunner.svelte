@@ -61,10 +61,10 @@
     const lower = t.toLowerCase();
     if (lower.includes("date")) return "YYYYMMDD";
     if (lower.includes("symbol")) return "QQQ";
-    if (lower.includes("strike")) return "* or e.g. 500000";
-    if (lower.includes("right"))  return "C, P, or both";
+    if (lower.includes("strike")) return "* or e.g. 500 / 17.5 (dollars)";
+    if (lower.includes("right"))  return "call, put, or both";
     if (lower.includes("expiration")) return "YYYYMMDD or *";
-    if (lower.includes("interval")) return "0 (tick), 1s, 60s";
+    if (lower.includes("interval")) return "tick, 1s, 1m, 1h";
     if (lower.includes("int") || lower.includes("number")) return "integer";
     if (lower.includes("bool")) return "true / false";
     return "";
@@ -147,7 +147,7 @@
 <style>
   .backdrop {
     position: fixed; inset: 0;
-    background: rgba(8,11,18,0.55);
+    background: var(--scrim);
     backdrop-filter: blur(4px);
     display: flex; align-items: center; justify-content: center;
     z-index: 90;

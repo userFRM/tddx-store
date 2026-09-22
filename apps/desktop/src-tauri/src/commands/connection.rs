@@ -94,7 +94,7 @@ pub async fn login(state: State<'_, Arc<AppState>>, args: LoginArgs) -> Result<S
 #[tauri::command]
 pub async fn logout(state: State<'_, Arc<AppState>>) -> Result<(), String> {
     // Stop the worker pool first so it can't observe a half-dropped
-    // client mid-`claim_next_by_class`. Aborting is best-effort: if a
+    // client mid-`claim_next`. Aborting is best-effort: if a
     // task is mid-network-request the abort fires after the in-flight
     // future yields. We don't await the JoinHandle past abort because
     // a hung future shouldn't block sign-out.

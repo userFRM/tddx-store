@@ -1,12 +1,16 @@
-//! Cron-style scheduled downloads, stored alongside the queue.
+//! Recurring scheduled downloads, stored alongside the queue.
 //!
-//! A `Schedule` row says "every day at HH:MM ET, queue this DataSpec".
-//! The desktop app's runtime (or `tdds-cli schedule run`) ticks
-//! these and enqueues fresh tasks. We keep cron parsing minimal —
-//! supports `daily HH:MM` and `weekday HH:MM` for now; richer cron
-//! lives behind the optional cron-parser dep when we need it.
+//! A row says "on these days, at HH:MM, queue this dataset". `at_time`
+//! is read in the machine's own timezone — the field is entered and
+//! displayed without one, and a desktop app that fired at a different
+//! hour than the clock on the wall would be surprising. Data
+//! availability is an Eastern-time question, so leave headroom after
+//! the close rather than scheduling on the boundary.
+//!
+//! Firing is driven by the desktop app's ticker (`schedule::due`), not
+//! from inside this module.
 
-use chrono::{DateTime, NaiveTime, Utc};
+use chrono::{DateTime, Datelike, Local, NaiveTime, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
@@ -20,12 +24,57 @@ pub struct Schedule {
     pub kind: DataKind,
     pub symbol: String,
     pub format: OutputFormat,
-    /// One of: "daily", "weekdays", "weekly:mon", …
+    /// Which days the schedule runs on. See [`Cadence`].
     pub cron_kind: String,
-    pub at_time: String, // "HH:MM"
+    pub at_time: String, // "HH:MM", in the machine's timezone
     pub last_fired_at: Option<i64>,
     pub paused: bool,
     pub created_at: i64,
+}
+
+/// Which days a schedule runs on, parsed from `Schedule::cron_kind`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cadence {
+    /// Every day.
+    Daily,
+    /// Monday through Friday.
+    Weekdays,
+    /// One named weekday, e.g. `weekly:mon`.
+    Weekly(Weekday),
+}
+
+impl Cadence {
+    /// Parse `daily` | `weekdays` | `weekly:<mon..sun>`. An unrecognised
+    /// value falls back to `Daily`: over-running is visible in the queue
+    /// and fixable, while silently never running is not.
+    pub fn parse(raw: &str) -> Self {
+        let raw = raw.trim().to_ascii_lowercase();
+        if let Some(day) = raw.strip_prefix("weekly:") {
+            return match day.trim() {
+                "mon" | "monday" => Cadence::Weekly(Weekday::Mon),
+                "tue" | "tuesday" => Cadence::Weekly(Weekday::Tue),
+                "wed" | "wednesday" => Cadence::Weekly(Weekday::Wed),
+                "thu" | "thursday" => Cadence::Weekly(Weekday::Thu),
+                "fri" | "friday" => Cadence::Weekly(Weekday::Fri),
+                "sat" | "saturday" => Cadence::Weekly(Weekday::Sat),
+                "sun" | "sunday" => Cadence::Weekly(Weekday::Sun),
+                _ => Cadence::Daily,
+            };
+        }
+        match raw.as_str() {
+            "weekdays" => Cadence::Weekdays,
+            _ => Cadence::Daily,
+        }
+    }
+
+    /// Does this cadence include `day`?
+    pub fn covers(self, day: Weekday) -> bool {
+        match self {
+            Cadence::Daily => true,
+            Cadence::Weekdays => !matches!(day, Weekday::Sat | Weekday::Sun),
+            Cadence::Weekly(w) => day == w,
+        }
+    }
 }
 
 impl Schedule {
@@ -33,8 +82,17 @@ impl Schedule {
         NaiveTime::parse_from_str(&self.at_time, "%H:%M").ok()
     }
 
-    /// Should this schedule fire `now`? Returns true if today's local
-    /// fire-time has passed AND we haven't fired in the last 23 h.
+    pub fn cadence(&self) -> Cadence {
+        Cadence::parse(&self.cron_kind)
+    }
+
+    /// Should this schedule fire at `now`? True when today is a day the
+    /// cadence covers, today's fire-time has passed, and the row has not
+    /// already fired within the refire window.
+    ///
+    /// `now` is converted to the machine's timezone before the date and
+    /// time-of-day comparisons; comparing against UTC fired a 09:30
+    /// schedule five hours early for a user on the US east coast.
     pub fn should_fire(&self, now: DateTime<Utc>) -> bool {
         if self.paused {
             return false;
@@ -42,8 +100,11 @@ impl Schedule {
         let Some(time) = self.at() else {
             return false;
         };
-        let local = now.naive_utc().date().and_time(time);
-        if now.naive_utc() < local {
+        let local = now.with_timezone(&Local).naive_local();
+        if !self.cadence().covers(local.date().weekday()) {
+            return false;
+        }
+        if local.time() < time {
             return false;
         }
         match self.last_fired_at {
@@ -99,6 +160,17 @@ pub async fn list(pool: &SqlitePool) -> crate::Result<Vec<Schedule>> {
         .fetch_all(pool)
         .await?;
     rows.into_iter().map(TryInto::try_into).collect()
+}
+
+/// Every schedule that is due to fire at `now`. The caller enqueues the
+/// work and calls [`mark_fired`]; this function has no side effects, so
+/// a caller that fails partway does not lose the rest of the batch.
+pub async fn due(pool: &SqlitePool, now: DateTime<Utc>) -> crate::Result<Vec<Schedule>> {
+    Ok(list(pool)
+        .await?
+        .into_iter()
+        .filter(|s| s.should_fire(now))
+        .collect())
 }
 
 pub async fn delete(pool: &SqlitePool, id: &str) -> crate::Result<()> {
@@ -160,5 +232,89 @@ impl TryFrom<ScheduleRow> for Schedule {
             paused: r.paused != 0,
             created_at: r.created_at,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn schedule(cron_kind: &str, at_time: &str) -> Schedule {
+        Schedule {
+            id: "s1".into(),
+            name: "test".into(),
+            kind: DataKind::parse("stock_history_eod").expect("registry knows the dataset"),
+            symbol: "QQQ".into(),
+            format: OutputFormat::Parquet,
+            cron_kind: cron_kind.into(),
+            at_time: at_time.into(),
+            last_fired_at: None,
+            paused: false,
+            created_at: 0,
+        }
+    }
+
+    /// `now` at the given local wall-clock time, whatever timezone the
+    /// test host runs in. The comparisons under test are local ones, so
+    /// building the instant from a local time is what exercises them.
+    fn local(y: i32, m: u32, d: u32, hh: u32, mm: u32) -> DateTime<Utc> {
+        Local
+            .with_ymd_and_hms(y, m, d, hh, mm, 0)
+            .single()
+            .expect("unambiguous local time")
+            .with_timezone(&Utc)
+    }
+
+    #[test]
+    fn cadence_parses_every_documented_spelling() {
+        assert_eq!(Cadence::parse("daily"), Cadence::Daily);
+        assert_eq!(Cadence::parse("weekdays"), Cadence::Weekdays);
+        assert_eq!(Cadence::parse("weekly:mon"), Cadence::Weekly(Weekday::Mon));
+        assert_eq!(Cadence::parse("WEEKLY:FRI"), Cadence::Weekly(Weekday::Fri));
+        // An unknown value runs daily rather than never.
+        assert_eq!(Cadence::parse("hourly"), Cadence::Daily);
+    }
+
+    #[test]
+    fn weekdays_does_not_fire_at_the_weekend() {
+        let s = schedule("weekdays", "17:30");
+        // 2026-09-18 is a Friday, 2026-09-19 a Saturday.
+        assert!(s.should_fire(local(2026, 9, 18, 18, 0)));
+        assert!(!s.should_fire(local(2026, 9, 19, 18, 0)));
+    }
+
+    #[test]
+    fn weekly_fires_only_on_its_named_day() {
+        let s = schedule("weekly:mon", "09:00");
+        // 2026-09-21 is a Monday, 2026-09-22 a Tuesday.
+        assert!(s.should_fire(local(2026, 9, 21, 9, 30)));
+        assert!(!s.should_fire(local(2026, 9, 22, 9, 30)));
+    }
+
+    #[test]
+    fn fire_time_is_read_in_local_time_not_utc() {
+        let s = schedule("daily", "17:30");
+        assert!(!s.should_fire(local(2026, 9, 21, 17, 29)));
+        assert!(s.should_fire(local(2026, 9, 21, 17, 31)));
+    }
+
+    #[test]
+    fn a_recent_firing_suppresses_the_next_one() {
+        let now = local(2026, 9, 21, 18, 0);
+        let mut s = schedule("daily", "17:30");
+        s.last_fired_at = Some(now.timestamp() - 60);
+        assert!(!s.should_fire(now));
+        s.last_fired_at = Some(now.timestamp() - crate::config::SCHEDULE_MIN_REFIRE_SECS - 1);
+        assert!(s.should_fire(now));
+    }
+
+    #[test]
+    fn paused_and_malformed_rows_never_fire() {
+        let now = local(2026, 9, 21, 18, 0);
+        let mut paused = schedule("daily", "17:30");
+        paused.paused = true;
+        assert!(!paused.should_fire(now));
+        assert!(!schedule("daily", "half past five").should_fire(now));
     }
 }

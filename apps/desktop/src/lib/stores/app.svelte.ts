@@ -13,6 +13,7 @@ import {
   api,
   governingTierForKind,
   minTierForKind,
+  resolveKindToEndpoint,
   tierMeets,
   TIER_RANK,
   type CatalogueEntry,
@@ -142,7 +143,7 @@ interface AppState {
   viewer: { open: boolean; path: string; title: string };
   // Live in-flight task ids (pushed by the worker event stream)
   runningTaskIds: string[];
-  // Endpoint runner (one-shot dispatcher modal for any of the 61)
+  // Endpoint runner (one-shot dispatcher modal for any registered endpoint)
   endpointRunnerOpen: boolean;
   endpointRunner: EndpointRunnerState | null;
   // Flatfiles modal
@@ -191,7 +192,7 @@ export const app = $state<AppState>({
     start: "",
     end: "",
     format: "parquet",
-    interval: "0",
+    interval: "tick",
     expiration: "*",
     strike: "*",
     right: "both",
@@ -216,7 +217,7 @@ export const app = $state<AppState>({
     optionRoots: [],
   },
   themePref: "system",
-  themeResolved: "dark",
+  themeResolved: "light",
   savedSearches: [],
   cmdkOpen2: false,
   viewer: { open: false, path: "", title: "" },
@@ -243,10 +244,13 @@ import { kvGet, kvRemove, kvSet } from "$lib/persistence/kv";
 const THEME_KEY = "tdds.theme";
 
 function systemPreferred(): ThemeResolved {
-  if (typeof window === "undefined" || !window.matchMedia) return "dark";
-  return window.matchMedia("(prefers-color-scheme: light)").matches
-    ? "light"
-    : "dark";
+  // Light is the fallback: the ThetaData identity is a light one, and
+  // an environment that cannot report a preference should land on the
+  // brand surface rather than the app's own dark variant.
+  if (typeof window === "undefined" || !window.matchMedia) return "light";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
 }
 
 function applyTheme(pref: ThemePref) {
@@ -285,7 +289,7 @@ export async function initTheme() {
 
   // Listen for OS preference changes when user is in "system" mode.
   if (window.matchMedia) {
-    const mq = window.matchMedia("(prefers-color-scheme: light)");
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const onChange = () => {
       if (app.themePref === "system") applyTheme("system");
     };
@@ -632,23 +636,36 @@ export async function loadCatalogue() {
   }
 }
 
-/** Verdict for a specific `DataKind` ("stock_trade", "option_quote", …).
- *  Falls back to a static client-side mirror when the verdict list
- *  hasn't loaded yet (the first ~150ms after a fresh connect). */
+/** Verdict for a dataset by name, legacy spellings included.
+ *
+ *  Three sources, in order of authority: the backend's per-endpoint
+ *  verdicts, the catalogue's `min_tier` (parsed from ThetaData's own
+ *  `x-min-subscription`), and — only in the ~150ms before either has
+ *  loaded — the static mirror in `api.ts`. Consulting the live verdict
+ *  first matters: the mirror covers a handful of endpoints, so ranking
+ *  it first reported almost every dataset as ungated and let the user
+ *  queue downloads their subscription would refuse. */
 export function tierForKind(kind: string): {
   required: TierName;
   user: TierName;
   allowed: boolean;
 } {
-  const required = minTierForKind(kind);
+  const endpoint = resolveKindToEndpoint(kind);
   const status = app.tierStatus;
   const userTier: TierName = status
-    ? (governingTierForKind(kind) === "options" ? status.options : status.stock)
+    ? status[governingTierForKind(endpoint)]
     : "Unknown";
+
+  const live = tierForEndpoint(endpoint);
+  if (live) {
+    return { required: live.required, user: live.user, allowed: live.allowed };
+  }
+  const fromCatalogue = app.catalogue.find((e) => e.name === endpoint)?.min_tier;
+  const required = fromCatalogue ?? minTierForKind(endpoint);
   return { required, user: userTier, allowed: tierMeets(userTier, required) };
 }
 
-/** Verdict for a registered endpoint by name (any of the 61). */
+/** Verdict for a registered endpoint by name. */
 export function tierForEndpoint(name: string): TierVerdict | null {
   return app.tierVerdicts.find((v) => v.endpoint === name) ?? null;
 }

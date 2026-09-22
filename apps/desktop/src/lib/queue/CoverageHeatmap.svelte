@@ -202,7 +202,7 @@
     background: var(--surface-1);
     color: var(--fg-muted);
   }
-  .state.error { color: var(--bad); border-color: rgba(255,126,126,0.3); }
+  .state.error { color: var(--bad); border-color: var(--bad-tint); }
 
   .months {
     display: grid;
@@ -228,7 +228,7 @@
     border-radius: 2px;
     border: 1px solid transparent;
   }
-  .cell.available { background: rgba(124, 140, 255, 0.18); border-color: rgba(124, 140, 255, 0.3); }
+  .cell.available { background: var(--accent-tint-strong); border-color: var(--accent-ring); }
   .cell.have      { background: var(--accent); border-color: var(--accent-hi); }
   .legend {
     display: inline-flex; align-items: center; gap: 6px;

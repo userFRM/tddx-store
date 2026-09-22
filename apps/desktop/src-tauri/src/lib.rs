@@ -85,7 +85,9 @@ pub fn run() {
             endpoints::list_query,
             endpoints::dataset_catalogue,
             endpoints::dataset_metadata,
+            endpoints::interval_options,
             flatfiles::flatfile_download,
+            flatfiles::flatfile_datasets,
             index_presets::index_presets,
             index_presets::index_constituents,
             preview::parquet_preview,
@@ -131,6 +133,10 @@ pub fn run() {
                     s.creds_path = data_dir.join("creds.txt").to_string_lossy().into();
                 }
             });
+
+            // Fire recurring downloads. The ticker no-ops until the user
+            // connects and the queue is open.
+            schedule::spawn_ticker(Arc::clone(app_state.inner()));
 
             // Best-effort tier-table refresh from `docs.thetadata.us`
             // on launch. The build-time table baked from the vendored

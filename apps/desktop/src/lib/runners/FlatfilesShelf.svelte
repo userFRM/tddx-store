@@ -1,36 +1,80 @@
 <script lang="ts">
   /**
-   * Browse shelf for the flatfile API: zip-of-CSV-per-day bulk pulls.
-   * Six combinations: stock × {trade, quote, trade_quote} and option ×
-   * {trade, quote, trade_quote, open_interest, eod, ohlc}. Click any
-   * card → FlatfileRunner modal.
+   * Browse shelf for the flat-file API: one archive per trading day.
+   *
+   * The card list is NOT written here — it comes from
+   * `flatfile_datasets`, which reads the SDK's `SERVED_DATASETS`. The
+   * service serves five datasets and rejects everything else, so a
+   * hardcoded list here would advertise downloads that cannot exist.
+   * Click any card → FlatfileRunner modal.
    */
+  import { onMount } from "svelte";
   import { FileArchive, Plus } from "lucide-svelte";
-  import { app } from "$lib/stores/app.svelte";
+  import { app, log } from "$lib/stores/app.svelte";
+  import { api, type FlatfileDataset, type FlatfileReqType, type FlatfileSecType } from "$lib/api";
 
   type FF = {
     title: string;
-    sec: "STOCK" | "OPTION";
-    req: "TRADE" | "QUOTE" | "TRADE_QUOTE" | "OPEN_INTEREST" | "OHLC" | "EOD";
+    sec: FlatfileSecType;
+    req: FlatfileReqType;
     desc: string;
   };
 
-  const FLATFILES: FF[] = [
-    { title: "Stock TRADE flatfile",       sec: "STOCK",  req: "TRADE",         desc: "Every NMS trade for one day, all symbols" },
-    { title: "Stock QUOTE flatfile",       sec: "STOCK",  req: "QUOTE",         desc: "Every NBBO update for one day, all symbols" },
-    { title: "Stock TRADE-QUOTE flatfile", sec: "STOCK",  req: "TRADE_QUOTE",   desc: "Trades + paired NBBO for one day, all symbols" },
-    { title: "Option TRADE flatfile",      sec: "OPTION", req: "TRADE",         desc: "Every option trade for one day, full chain" },
-    { title: "Option QUOTE flatfile",      sec: "OPTION", req: "QUOTE",         desc: "Every NBBO option quote for one day, full chain" },
-    { title: "Option TRADE-QUOTE flatfile",sec: "OPTION", req: "TRADE_QUOTE",   desc: "Option trades + paired NBBO, full chain" },
-    { title: "Option OI flatfile",         sec: "OPTION", req: "OPEN_INTEREST", desc: "Daily open interest snapshot, full chain" },
-    { title: "Option EOD flatfile",        sec: "OPTION", req: "EOD",           desc: "Per-strike EOD bars, full chain" },
-  ];
+  const SEC_LABEL: Record<FlatfileSecType, string> = {
+    STOCK: "Stock",
+    OPTION: "Option",
+  };
+
+  /** Copy per served dataset. Keyed by `sec:req` so an added dataset
+   *  shows up with a generic label rather than being silently dropped. */
+  const COPY: Record<string, { title: string; desc: string }> = {
+    "OPTION:trade_quote": {
+      title: "Option trade-quote",
+      desc: "Every OPRA trade paired with the prevailing NBBO, whole chain, one day",
+    },
+    "OPTION:open_interest": {
+      title: "Option open interest",
+      desc: "Daily open-interest snapshot, whole chain",
+    },
+    "OPTION:eod": {
+      title: "Option end-of-day",
+      desc: "Per-contract EOD summary, whole chain",
+    },
+    "STOCK:trade_quote": {
+      title: "Stock trade-quote",
+      desc: "Every trade paired with the prevailing NBBO, every symbol, one day",
+    },
+    "STOCK:eod": {
+      title: "Stock end-of-day",
+      desc: "Per-symbol EOD summary, every symbol",
+    },
+  };
+
+  function toFF(d: FlatfileDataset): FF {
+    const copy = COPY[`${d.sec_type}:${d.req_type}`];
+    return {
+      sec: d.sec_type,
+      req: d.req_type,
+      title: copy?.title ?? `${SEC_LABEL[d.sec_type]} ${d.req_type.replace("_", " ")}`,
+      desc: copy?.desc ?? "One archive per trading day",
+    };
+  }
+
+  let flatfiles = $state<FF[]>([]);
+
+  onMount(async () => {
+    try {
+      flatfiles = (await api.flatfileDatasets()).map(toFF);
+    } catch (e) {
+      log("error", `Flat-file catalogue unavailable: ${e}`);
+    }
+  });
 
   function open(ff: FF) {
     // Reuse the endpoint runner store with a synthetic registry entry.
     app.endpointRunner = {
       endpoint: {
-        name: `flatfile_${ff.sec.toLowerCase()}_${ff.req.toLowerCase()}`,
+        name: `flatfile_${ff.sec.toLowerCase()}_${ff.req}`,
         description: ff.desc,
         category: ff.sec.toLowerCase(),
         subcategory: "flatfile",
@@ -58,10 +102,10 @@
       <FileArchive size={16} />
       Flatfiles · bulk-day pulls
     </h2>
-    <span class="count text-caption">{FLATFILES.length} bundles</span>
+    <span class="count text-caption">{flatfiles.length} datasets</span>
   </header>
   <div class="grid">
-    {#each FLATFILES as ff (ff.title)}
+    {#each flatfiles as ff (`${ff.sec}:${ff.req}`)}
       <article class="card" onclick={() => open(ff)} role="button" tabindex="0"
                onkeydown={(e) => e.key === "Enter" && open(ff)}>
         <div class="head">
@@ -71,7 +115,7 @@
         <h3 class="t">{ff.title}</h3>
         <p class="desc">{ff.desc}</p>
         <div class="foot">
-          <span class="hint text-caption">One zip / CSV per request</span>
+          <span class="hint text-caption">One archive per trading day</span>
           <button class="run-btn" onclick={(e) => { e.stopPropagation(); open(ff); }}>
             <Plus size={11} /> Download
           </button>
@@ -173,6 +217,6 @@
   .run-btn:hover {
     background: var(--accent-tint);
     color: var(--accent-hi);
-    border-color: rgba(124,140,255,0.3);
+    border-color: var(--accent-ring);
   }
 </style>

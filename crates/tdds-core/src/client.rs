@@ -1,15 +1,15 @@
-//! Thin wrapper around thetadatadx::ThetaDataDxClient with a creds path that
+//! Thin wrapper around `thetadatadx::Client` with a creds path that
 //! falls through env (`DATADOCK_CREDS`), explicit override, then default.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use thetadatadx::{Credentials, DirectConfig, ThetaDataDxClient};
+use thetadatadx::{Credentials, DirectConfig, MarketDataClient};
 
 use crate::tier::{Tier, UserTiers};
 
 #[derive(Clone)]
 pub struct Client {
-    inner: Arc<ThetaDataDxClient>,
+    inner: Arc<thetadatadx::Client>,
 }
 
 impl Client {
@@ -38,7 +38,7 @@ impl Client {
 
     async fn connect_with(creds: Credentials) -> crate::Result<Self> {
         let cfg = DirectConfig::production();
-        let inner = ThetaDataDxClient::connect(&creds, cfg).await?;
+        let inner = thetadatadx::Client::connect(&creds, cfg).await?;
         Ok(Self {
             inner: Arc::new(inner),
         })
@@ -50,26 +50,29 @@ impl Client {
             .ok();
     }
 
-    pub fn raw(&self) -> &ThetaDataDxClient {
+    pub fn raw(&self) -> &thetadatadx::Client {
         &self.inner
     }
 
+    /// The market-data query surface every endpoint dispatch runs through.
+    pub fn market_data(&self) -> &MarketDataClient {
+        self.inner.market_data()
+    }
+
     /// User's per-asset-class subscription tiers, decoded from the auth
-    /// response captured at connect time. ThetaData's Nexus carries
-    /// four bytes (`stock_subscription`, `options_subscription`,
-    /// `indices_subscription`, `interest_rate_subscription`); the
-    /// upstream `SubscriptionInfo` struct in `thetadatadx` v10 only
-    /// surfaces the first two, so `indices` / `interest_rate` come
-    /// back `Tier::Unknown` until the SDK exposes accessors for them
-    /// (the values are present on the wire — we just can't reach
-    /// them through the public API yet).
+    /// response captured at connect time. ThetaData's Nexus carries four
+    /// fields (`stock_subscription`, `options_subscription`,
+    /// `indices_subscription`, `interest_rate_subscription`) and
+    /// `SubscriptionInfo` surfaces all four; a field the auth response
+    /// omitted comes back as the literal `"Unknown"`, which
+    /// `Tier::from_label` maps to `Tier::Unknown`.
     pub fn user_tiers(&self) -> UserTiers {
         let info = self.inner.subscription_info();
         UserTiers {
             stock: Tier::from_label(&info.stock),
             options: Tier::from_label(&info.options),
-            indices: Tier::Unknown,
-            interest_rate: Tier::Unknown,
+            indices: Tier::from_label(&info.indices),
+            interest_rate: Tier::from_label(&info.interest_rate),
         }
     }
 
@@ -81,7 +84,11 @@ impl Client {
         start: chrono::NaiveDate,
         end: chrono::NaiveDate,
     ) -> crate::Result<Vec<chrono::NaiveDate>> {
-        let raw = self.inner.stock_list_dates("TRADE", symbol).await?;
+        let raw = self
+            .inner
+            .market_data()
+            .stock_list_dates("TRADE", symbol)
+            .await?;
         Ok(raw
             .iter()
             .filter_map(|s| chrono::NaiveDate::parse_from_str(&s.replace('-', ""), "%Y%m%d").ok())
