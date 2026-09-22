@@ -155,6 +155,49 @@ fn default_right() -> String {
     "both".into()
 }
 
+/// The widest window the range endpoints accept. Asking for more is
+/// rejected server-side with "Too many days between start and end date;
+/// max 365 days allowed", so a longer request has to be split before it
+/// is queued rather than discovered as a failure afterwards.
+pub const MAX_RANGE_DAYS: i64 = 365;
+
+/// Split `[start, end]` into consecutive windows no wider than
+/// [`MAX_RANGE_DAYS`].
+///
+/// A window already within the limit comes back unchanged, so the
+/// common case stays one task. Longer ones are divided into the fewest
+/// pieces that fit and then balanced across them: a three-year request
+/// becomes three requests of a year each, and a four-year one becomes
+/// four evenly-sized requests rather than three full years plus a
+/// three-day remainder. Same number of calls either way, but the
+/// progress the user watches advances evenly and a failure costs a
+/// proportionate slice of the work.
+pub fn chunk_window(start: NaiveDate, end: NaiveDate) -> Vec<(NaiveDate, NaiveDate)> {
+    if end < start {
+        return vec![];
+    }
+    // Inclusive of both ends: Jan 1 to Jan 1 is one day of data.
+    let total_days = (end - start).num_days() + 1;
+    let max_per_chunk = MAX_RANGE_DAYS + 1;
+    // `div_ceil` on integers is still unstable on the pinned toolchain.
+    let ceil_div = |a: i64, b: i64| (a + b - 1) / b;
+    let chunks = ceil_div(total_days, max_per_chunk).max(1);
+    let per_chunk = ceil_div(total_days, chunks);
+
+    let mut out = Vec::with_capacity(chunks as usize);
+    let mut from = start;
+    while from <= end {
+        let candidate = from + chrono::Duration::days(per_chunk - 1);
+        let to = if candidate < end { candidate } else { end };
+        out.push((from, to));
+        match to.succ_opt() {
+            Some(next) => from = next,
+            None => break,
+        }
+    }
+    out
+}
+
 impl DataSpec {
     pub fn ymd(&self) -> String {
         self.date.format("%Y%m%d").to_string()
@@ -454,6 +497,58 @@ mod tests {
     /// without the arguments the registry marks required, and failed
     /// with "missing required arg 'start_date'" — 100% of the time,
     /// for every symbol and every window.
+    #[test]
+    fn a_window_inside_the_limit_stays_one_task() {
+        let a = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+        let b = NaiveDate::from_ymd_opt(2025, 6, 1).unwrap();
+        assert_eq!(chunk_window(a, b), vec![(a, b)]);
+    }
+
+    /// Three years of daily history is four calls, not one rejected
+    /// one and not 751 malformed ones.
+    #[test]
+    fn a_longer_window_is_split_at_the_server_limit() {
+        let a = NaiveDate::from_ymd_opt(2023, 9, 22).unwrap();
+        let b = NaiveDate::from_ymd_opt(2026, 9, 22).unwrap();
+        let chunks = chunk_window(a, b);
+
+        assert_eq!(
+            chunks.len(),
+            3,
+            "three years is three requests, not one rejected one"
+        );
+        assert_eq!(chunks.first().unwrap().0, a, "starts where asked");
+        assert_eq!(chunks.last().unwrap().1, b, "ends where asked");
+
+        // Balanced: no window is more than a day off any other, so the
+        // split does not leave a one-day tail.
+        let widths: Vec<i64> = chunks
+            .iter()
+            .map(|(f, t)| (*t - *f).num_days() + 1)
+            .collect();
+        let (lo, hi) = (widths.iter().min().unwrap(), widths.iter().max().unwrap());
+        assert!(hi - lo <= 1, "windows are lopsided: {widths:?}");
+        assert_eq!(widths.iter().sum::<i64>(), (b - a).num_days() + 1);
+        for (from, to) in &chunks {
+            assert!(
+                (*to - *from).num_days() <= MAX_RANGE_DAYS,
+                "{from}..{to} is wider than the server accepts"
+            );
+        }
+        // Contiguous and non-overlapping: no day is fetched twice and
+        // none is skipped.
+        for pair in chunks.windows(2) {
+            assert_eq!(pair[0].1.succ_opt().unwrap(), pair[1].0);
+        }
+    }
+
+    #[test]
+    fn a_backwards_window_yields_nothing() {
+        let a = NaiveDate::from_ymd_opt(2025, 6, 1).unwrap();
+        let b = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+        assert!(chunk_window(a, b).is_empty());
+    }
+
     #[test]
     fn range_endpoints_receive_the_window_they_declare() {
         let mut spec = option_spec();

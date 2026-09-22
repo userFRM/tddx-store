@@ -47,6 +47,9 @@ export type TaskView = {
   kind: string;
   symbol: string;
   date: string;
+  /** End of the window, for a task that covers a range. `null` when the
+   *  task is one session. */
+  end_date: string | null;
   rows: number | null;
   bytes: number | null;
   error: string | null;

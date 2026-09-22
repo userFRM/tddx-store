@@ -76,7 +76,13 @@ pub async fn enqueue(state: State<'_, Arc<AppState>>, args: EnqueueArgs) -> Resu
                     .map(|d| (d, None))
                     .collect()
             } else {
-                vec![(s, Some(e))]
+                // The server caps a range call at 365 days, so a wider
+                // window becomes several consecutive tasks rather than
+                // one request it will reject.
+                tdds_core::chunk_window(s, e)
+                    .into_iter()
+                    .map(|(from, to)| (from, Some(to)))
+                    .collect()
             }
         }
         _ => return Err("pass date or start+end".into()),

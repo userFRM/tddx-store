@@ -79,6 +79,9 @@ pub struct TaskView {
     pub kind: String,
     pub symbol: String,
     pub date: String,
+    /// End of the window, when the task covers a range rather than one
+    /// session. `None` for a single-day task.
+    pub end_date: Option<String>,
     pub rows: Option<i64>,
     pub bytes: Option<i64>,
     pub error: Option<String>,
@@ -101,6 +104,11 @@ impl From<Task> for TaskView {
             kind: t.spec.kind.as_str().to_string(),
             symbol: t.spec.symbol,
             date: t.spec.date.format("%Y-%m-%d").to_string(),
+            end_date: t
+                .spec
+                .end_date
+                .filter(|d| *d != t.spec.date)
+                .map(|d| d.format("%Y-%m-%d").to_string()),
             rows: t.rows,
             bytes: t.bytes,
             error: t.error,

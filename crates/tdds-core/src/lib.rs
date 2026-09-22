@@ -35,7 +35,10 @@ pub use registry::{
     find_endpoint, EndpointInfo, ParamInfo,
 };
 pub use schedule::Schedule;
-pub use spec::{normalize_interval, DataKind, DataSpec, EndpointSpec, IntervalOption, INTERVALS};
+pub use spec::{
+    chunk_window, normalize_interval, DataKind, DataSpec, EndpointSpec, IntervalOption, INTERVALS,
+    MAX_RANGE_DAYS,
+};
 pub use tier::{
     evaluate as tier_evaluate, governing_tier, is_tier_denied, min_tier_for, Tier, TierVerdict,
     UserTiers, UPGRADE_URL,

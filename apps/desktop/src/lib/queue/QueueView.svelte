@@ -409,7 +409,9 @@
             <div class="task-top">
               <code class="task-kind">{task.kind}</code>
               <span class="task-symbol">{task.symbol}</span>
-              <span class="task-date text-figures">{task.date}</span>
+              <span class="task-date text-figures">
+                {task.date}{task.end_date ? ` → ${task.end_date}` : ""}
+              </span>
             </div>
 
             {#if task.status === "running"}
