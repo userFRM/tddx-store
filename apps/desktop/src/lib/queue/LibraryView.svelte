@@ -9,12 +9,41 @@
     ArrowRight,
     Library,
   } from "lucide-svelte";
+  import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { api, fmtBytes, fmtNum, type Coverage } from "$lib/api";
-  import { app, navigate } from "$lib/stores/app.svelte";
+  import { app, navigate, log } from "$lib/stores/app.svelte";
   import { onMount } from "svelte";
 
   let coverage = $state<Coverage[]>([]);
   let loading = $state(true);
+  let rowMsg = $state("");
+
+  /** Queue every trading day missing from a set's own span. */
+  async function refillGaps(row: Coverage) {
+    rowMsg = `Checking ${row.symbol} ${row.kind}…`;
+    try {
+      const n = await api.requeueMissingDates(row.kind, row.symbol);
+      rowMsg =
+        n === 0
+          ? `${row.symbol} ${row.kind} has no gaps`
+          : `Queued ${n} missing day${n === 1 ? "" : "s"} for ${row.symbol}`;
+      log("info", rowMsg);
+    } catch (e: unknown) {
+      rowMsg = e instanceof Error ? e.message : String(e);
+      log("error", `Refill failed: ${rowMsg}`);
+    }
+    setTimeout(() => (rowMsg = ""), 3000);
+  }
+
+  /** Reveal the dataset's directory in the OS file manager. */
+  async function revealKindDir(row: Coverage) {
+    try {
+      await revealItemInDir(`${app.settings.output_dir}/${row.kind}`);
+    } catch (e: unknown) {
+      rowMsg = e instanceof Error ? e.message : String(e);
+      setTimeout(() => (rowMsg = ""), 3000);
+    }
+  }
   let filterQuery = $state("");
   let expandedSymbols = $state<Set<string>>(new Set());
 
@@ -118,6 +147,10 @@
       {/if}
     </div>
 
+    {#if rowMsg}
+      <span class="row-msg text-body-sm" role="status">{rowMsg}</span>
+    {/if}
+
     <div class="search-wrap">
       <Search size={14} strokeWidth={1.75} class="search-icon" aria-hidden="true" />
       <input
@@ -209,15 +242,17 @@
                         </button>
                         <button
                           class="btn-icon"
-                          title="Re-run missing dates"
-                          aria-label="Re-run missing dates for {symbol} {row.kind}"
+                          onclick={() => refillGaps(row)}
+                          title="Queue the missing dates in this range"
+                          aria-label="Queue the missing dates for {symbol} {row.kind}"
                         >
                           <RotateCcw size={13} strokeWidth={1.75} />
                         </button>
                         <button
                           class="btn-icon"
-                          title="Open output directory"
-                          aria-label="Open output directory for {symbol} {row.kind}"
+                          onclick={() => revealKindDir(row)}
+                          title="Show the output directory"
+                          aria-label="Show the output directory for {symbol} {row.kind}"
                         >
                           <FolderOpen size={13} strokeWidth={1.75} />
                         </button>
@@ -302,6 +337,13 @@
   }
 
   /* Header */
+  .row-msg {
+    color: var(--fg-muted);
+    margin-left: auto;
+    padding-right: var(--sp-3);
+    white-space: nowrap;
+  }
+
   .lib-header {
     display: flex;
     align-items: center;

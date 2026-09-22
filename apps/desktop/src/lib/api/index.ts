@@ -33,7 +33,11 @@ export type Settings = {
   password?: string;
 };
 
-export type LoginArgs = { email: string; password: string };
+/** Tagged to match the Rust `LoginArgs` enum, so "an API key plus a
+ *  blank password" is not representable on either side. */
+export type LoginArgs =
+  | { method: "password"; email: string; password: string }
+  | { method: "api_key"; api_key: string };
 
 export type Counts = [string, number][];
 
@@ -47,6 +51,9 @@ export type TaskView = {
   bytes: number | null;
   error: string | null;
   attempts: number;
+  /** Where the task writes. Present so "open file location" has a path
+   *  without the UI reconstructing the naming scheme. */
+  path: string;
 };
 
 export type QueueSnapshot = {
@@ -63,6 +70,9 @@ export type Coverage = {
   bytes: number;
   first: string | null;
   last: string | null;
+  /** Extension the existing files use, so a refill writes the same
+   *  format as the rest of the set. */
+  format: string;
 };
 
 export type Transforms = {
@@ -150,7 +160,17 @@ export const api = {
   /** Returns true iff a new pool was started; false means one is already running. */
   runQueue: () => invoke<boolean>("run_queue"),
   requeueFailed: () => invoke<number>("requeue_failed"),
-  cancelTask: (id: string) => invoke<void>("cancel_task", { id }),
+  /** Bulk queue operations. Each returns how many rows it changed;
+   *  rows that had already moved on are skipped rather than erroring. */
+  cancelTasks: (ids: string[]) => invoke<number>("cancel_tasks", { ids }),
+  requeueTasks: (ids: string[]) => invoke<number>("requeue_tasks", { ids }),
+  removeTasks: (ids: string[]) => invoke<number>("remove_tasks", { ids }),
+  bumpTasks: (ids: string[]) => invoke<number>("bump_tasks", { ids }),
+  duplicateTasks: (ids: string[]) => invoke<number>("duplicate_tasks", { ids }),
+  /** Delete every finished row, or every row in one finished status.
+   *  Runs against the whole queue, not just the loaded page. */
+  clearTasks: (status?: "done" | "failed" | "empty") =>
+    invoke<number>("clear_tasks", { status: status ?? null }),
   workerPoolActive: () => invoke<boolean>("worker_pool_active"),
   health: () => invoke<HealthSnapshot>("health"),
   duckdbCommand: (output_dir: string) =>
@@ -163,6 +183,8 @@ export const api = {
   listQuery: (args: ListQueryArgs) => invoke<string[]>("list_query", { args }),
   flatfileDownload: (args: FlatfileArgs) => invoke<string>("flatfile_download", { args }),
   flatfileDatasets: () => invoke<FlatfileDataset[]>("flatfile_datasets"),
+  requeueMissingDates: (kind: string, symbol: string) =>
+    invoke<number>("requeue_missing_dates", { kind, symbol }),
   indexPresets: () => invoke<IndexPresetView[]>("index_presets"),
   indexConstituents: (indexId: string) => invoke<string[]>("index_constituents", { indexId }),
   parquetPreview: (args: ParquetPreviewArgs) => invoke<PreviewResult>("parquet_preview", { args }),
@@ -174,7 +196,6 @@ export const api = {
   tierStatus: () => invoke<TierStatus>("tier_status"),
   tierEndpoints: () => invoke<TierVerdict[]>("tier_endpoints"),
   datasetCatalogue: () => invoke<CatalogueEntry[]>("dataset_catalogue"),
-  datasetMetadata: (name: string) => invoke<EndpointMeta>("dataset_metadata", { name }),
 };
 
 export type TierName = "Unknown" | "Free" | "Value" | "Standard" | "Pro";

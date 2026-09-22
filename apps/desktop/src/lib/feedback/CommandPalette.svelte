@@ -195,11 +195,15 @@
           placeholder="Search datasets, symbols, saved searches…"
           autocomplete="off"
           spellcheck="false"
+          role="combobox"
+          aria-expanded="true"
+          aria-controls="cmdk-list"
+          aria-activedescendant={filtered.length ? `cmdk-option-${highlight}` : undefined}
         />
         <span class="hint text-caption">Esc</span>
       </header>
 
-      <ul class="list" role="listbox">
+      <ul id="cmdk-list" class="list" role="listbox" aria-label="Results">
         {#if filtered.length === 0}
           <li class="empty fg-muted">
             No matches. {#if !app.symbols.loadedAt}
@@ -209,13 +213,18 @@
         {/if}
         {#each filtered as item, i (item.kind + ":" + item.label)}
           {@const Icon = item.icon}
+          <!-- Keyboard lives on the input via `aria-activedescendant`,
+               which is the combobox pattern; the pointer handlers here
+               are the mouse half of the same control. -->
           <li
+            id="cmdk-option-{i}"
             class="row"
             class:active={i === highlight}
             role="option"
             aria-selected={i === highlight}
             onmouseenter={() => (highlight = i)}
             onclick={() => pick(item)}
+            onkeydown={(e) => e.key === "Enter" && pick(item)}
           >
             <span class="row-icon"><Icon size={14} /></span>
             <span class="row-label">{item.label}</span>

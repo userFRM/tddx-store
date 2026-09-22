@@ -367,6 +367,118 @@ impl Queue {
         Ok(())
     }
 
+    /// Raise a pending task's priority so the next free worker claims it
+    /// first. `claim_next` orders by `priority DESC, created_at ASC`, so
+    /// one above the current maximum is enough and avoids an ever-growing
+    /// number.
+    ///
+    /// Returns `false` when the row is no longer pending, which is the
+    /// normal outcome of bumping a task a worker already picked up.
+    pub async fn bump_priority(&self, id: &str) -> crate::Result<bool> {
+        let top: Option<i32> = sqlx::query_scalar("SELECT MAX(priority) FROM tasks")
+            .fetch_one(&self.pool)
+            .await?;
+        let next = top.unwrap_or(0).saturating_add(1);
+        let res = sqlx::query("UPDATE tasks SET priority=? WHERE id=? AND status='pending'")
+            .bind(next)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// Queue a fresh copy of `id`: same dataset, symbol, date, filters,
+    /// format and output directory, back in `pending` with no history.
+    /// Returns the new task's id.
+    pub async fn duplicate(&self, id: &str) -> crate::Result<String> {
+        let task = self.fetch(id).await?;
+        self.enqueue(task.spec, task.format, &task.output_dir, task.priority)
+            .await
+    }
+
+    /// Cancel every id that is still pending or running. Returns how
+    /// many rows changed; ids that already finished are skipped.
+    pub async fn cancel_many(&self, ids: &[String]) -> crate::Result<u64> {
+        self.update_many(
+            ids,
+            "UPDATE tasks SET status='failed', error='cancelled by user', finished_at=?, \
+             claimed_by=NULL, claimed_at=NULL, last_heartbeat_at=NULL \
+             WHERE status IN ('pending','running') AND id IN",
+            Some(Utc::now().timestamp()),
+        )
+        .await
+    }
+
+    /// Put every id back to `pending`, whatever its current status.
+    pub async fn requeue_many(&self, ids: &[String]) -> crate::Result<u64> {
+        self.update_many(
+            ids,
+            "UPDATE tasks SET status='pending', error=NULL, finished_at=NULL, rows=NULL, \
+             bytes=NULL, claimed_by=NULL, claimed_at=NULL, last_heartbeat_at=NULL \
+             WHERE id IN",
+            None,
+        )
+        .await
+    }
+
+    /// Delete every id that has finished. A pending or running row is
+    /// left alone: removing one out from under a worker would orphan an
+    /// in-flight request.
+    pub async fn remove_many(&self, ids: &[String]) -> crate::Result<u64> {
+        self.update_many(
+            ids,
+            "DELETE FROM tasks WHERE status IN ('done','failed','empty') AND id IN",
+            None,
+        )
+        .await
+    }
+
+    /// Delete every finished row, or every row in one finished status.
+    /// Operates on the whole table, not just what the UI has loaded.
+    pub async fn clear_finished(&self, status: Option<TaskStatus>) -> crate::Result<u64> {
+        let res = match status {
+            Some(s) if s.is_terminal() => {
+                sqlx::query("DELETE FROM tasks WHERE status = ?")
+                    .bind(s.as_str())
+                    .execute(&self.pool)
+                    .await?
+            }
+            Some(_) => return Ok(0),
+            None => {
+                sqlx::query("DELETE FROM tasks WHERE status IN ('done','failed','empty')")
+                    .execute(&self.pool)
+                    .await?
+            }
+        };
+        Ok(res.rows_affected())
+    }
+
+    /// Run `sql` with an `IN (?, ?, ...)` list built for `ids`, plus an
+    /// optional leading `?1` bound before them. SQLite has a bound
+    /// parameter limit, so the ids are applied in chunks.
+    async fn update_many(
+        &self,
+        ids: &[String],
+        sql: &str,
+        leading: Option<i64>,
+    ) -> crate::Result<u64> {
+        const CHUNK: usize = 400;
+        let mut affected = 0u64;
+        for chunk in ids.chunks(CHUNK) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let statement = format!("{sql} ({placeholders})");
+            let mut q = sqlx::query(&statement);
+            if let Some(v) = leading {
+                q = q.bind(v);
+            }
+            for id in chunk {
+                q = q.bind(id);
+            }
+            affected += q.execute(&self.pool).await?.rows_affected();
+        }
+        Ok(affected)
+    }
+
     pub async fn requeue(&self, id: &str) -> crate::Result<()> {
         sqlx::query(
             "UPDATE tasks
@@ -392,7 +504,7 @@ impl Queue {
                 .fetch_all(&self.pool)
                 .await?;
         rows.into_iter()
-            .filter_map(|(s, n)| status_from_str(&s).map(|st| (st, n)))
+            .filter_map(|(s, n)| TaskStatus::parse(&s).map(|st| (st, n)))
             .map(Ok)
             .collect()
     }
@@ -411,15 +523,37 @@ fn status_to_str(s: TaskStatus) -> &'static str {
         TaskStatus::Empty => "empty",
     }
 }
-fn status_from_str(s: &str) -> Option<TaskStatus> {
-    Some(match s {
-        "pending" => TaskStatus::Pending,
-        "running" => TaskStatus::Running,
-        "done" => TaskStatus::Done,
-        "failed" => TaskStatus::Failed,
-        "empty" => TaskStatus::Empty,
-        _ => return None,
-    })
+impl TaskStatus {
+    /// The string this status is stored and transported as.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TaskStatus::Pending => "pending",
+            TaskStatus::Running => "running",
+            TaskStatus::Done => "done",
+            TaskStatus::Failed => "failed",
+            TaskStatus::Empty => "empty",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "pending" => TaskStatus::Pending,
+            "running" => TaskStatus::Running,
+            "done" => TaskStatus::Done,
+            "failed" => TaskStatus::Failed,
+            "empty" => TaskStatus::Empty,
+            _ => return None,
+        })
+    }
+
+    /// True once the task will not change again on its own. Only
+    /// terminal rows can be removed from the queue.
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            TaskStatus::Done | TaskStatus::Failed | TaskStatus::Empty
+        )
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -456,7 +590,7 @@ impl TryFrom<TaskRow> for Task {
             .map_err(|e| crate::Error::Other(format!("bad date {}: {}", r.date, e)))?;
         let format = OutputFormat::parse(&r.format)
             .ok_or_else(|| crate::Error::Other(format!("bad format {}", r.format)))?;
-        let status = status_from_str(&r.status)
+        let status = TaskStatus::parse(&r.status)
             .ok_or_else(|| crate::Error::Other(format!("bad status {}", r.status)))?;
         Ok(Task {
             id: r.id,
@@ -505,6 +639,156 @@ mod tests {
             right: "both".into(),
             transforms: crate::Transforms::default(),
         }
+    }
+
+    /// Enqueue `n` tasks and return their ids, in order.
+    async fn enqueue_n(queue: &Queue, n: usize) -> Vec<String> {
+        let mut ids = Vec::with_capacity(n);
+        for i in 0..n {
+            let mut spec = sample_spec();
+            spec.date = NaiveDate::from_ymd_opt(2024, 1, 2)
+                .unwrap()
+                .checked_add_days(chrono::Days::new(i as u64))
+                .unwrap();
+            ids.push(
+                queue
+                    .enqueue(spec, OutputFormat::Parquet, "/tmp/out", 0)
+                    .await
+                    .unwrap(),
+            );
+        }
+        ids
+    }
+
+    async fn status_of(queue: &Queue, id: &str) -> TaskStatus {
+        queue.fetch(id).await.unwrap().status
+    }
+
+    /// Claim the next task and drive it to a terminal state, the way a
+    /// worker would. `mark_*` only acts on a running row, so a test that
+    /// writes a terminal status onto a pending one silently does nothing.
+    async fn finish_next(queue: &Queue, outcome: TaskStatus) -> String {
+        let task = queue.claim_next().await.unwrap().expect("a pending task");
+        let ok = match outcome {
+            TaskStatus::Done => queue.mark_done(&task.id, 10, 100).await.unwrap(),
+            TaskStatus::Failed => queue.mark_failed(&task.id, "boom").await.unwrap(),
+            TaskStatus::Empty => queue.mark_empty(&task.id).await.unwrap(),
+            other => panic!("{other:?} is not a terminal outcome"),
+        };
+        assert!(ok, "the claimed row should have accepted its outcome");
+        task.id
+    }
+
+    #[tokio::test]
+    async fn cancel_many_only_touches_unfinished_rows() {
+        let queue = single_connection_memory_queue("owner").await;
+        let ids = enqueue_n(&queue, 3).await;
+        let finished = finish_next(&queue, TaskStatus::Done).await;
+
+        let changed = queue.cancel_many(&ids).await.unwrap();
+
+        assert_eq!(changed, 2, "the finished row must be left alone");
+        assert_eq!(status_of(&queue, &finished).await, TaskStatus::Done);
+        for id in ids.iter().filter(|id| **id != finished) {
+            assert_eq!(status_of(&queue, id).await, TaskStatus::Failed);
+        }
+    }
+
+    #[tokio::test]
+    async fn requeue_many_clears_the_previous_attempt() {
+        let queue = single_connection_memory_queue("owner").await;
+        let ids = enqueue_n(&queue, 2).await;
+        let failed = finish_next(&queue, TaskStatus::Failed).await;
+
+        assert_eq!(queue.requeue_many(&ids).await.unwrap(), 2);
+
+        let task = queue.fetch(&failed).await.unwrap();
+        assert_eq!(task.status, TaskStatus::Pending);
+        assert!(task.error.is_none(), "a requeued row carries no error");
+        assert!(task.rows.is_none() && task.bytes.is_none());
+    }
+
+    #[tokio::test]
+    async fn remove_many_refuses_to_delete_live_rows() {
+        let queue = single_connection_memory_queue("owner").await;
+        let ids = enqueue_n(&queue, 2).await;
+        let done = finish_next(&queue, TaskStatus::Done).await;
+        let still_pending = ids.iter().find(|id| **id != done).unwrap();
+
+        // The pending row stays: removing it would orphan whatever claims
+        // it next.
+        assert_eq!(queue.remove_many(&ids).await.unwrap(), 1);
+        assert!(queue.fetch(&done).await.is_err(), "the done row is gone");
+        assert_eq!(status_of(&queue, still_pending).await, TaskStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn clear_finished_can_target_one_status_or_all_of_them() {
+        let queue = single_connection_memory_queue("owner").await;
+        enqueue_n(&queue, 4).await;
+        finish_next(&queue, TaskStatus::Done).await;
+        finish_next(&queue, TaskStatus::Failed).await;
+        finish_next(&queue, TaskStatus::Empty).await;
+
+        assert_eq!(
+            queue
+                .clear_finished(Some(TaskStatus::Failed))
+                .await
+                .unwrap(),
+            1
+        );
+        // A live status is never a deletion target, even when asked.
+        assert_eq!(
+            queue
+                .clear_finished(Some(TaskStatus::Pending))
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(queue.clear_finished(None).await.unwrap(), 2);
+
+        let left = queue.list(None, 100).await.unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].status, TaskStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn bulk_updates_span_more_ids_than_one_sql_statement_binds() {
+        let queue = single_connection_memory_queue("owner").await;
+        // Past the 400-id chunk the bulk helper splits on, so a failure
+        // to iterate chunks shows up as a short count.
+        let ids = enqueue_n(&queue, 450).await;
+        assert_eq!(queue.cancel_many(&ids).await.unwrap(), 450);
+    }
+
+    #[tokio::test]
+    async fn bump_priority_moves_a_task_ahead_of_the_queue() {
+        let queue = single_connection_memory_queue("owner").await;
+        let ids = enqueue_n(&queue, 3).await;
+
+        assert!(queue.bump_priority(&ids[2]).await.unwrap());
+        assert_eq!(queue.claim_next().await.unwrap().unwrap().id, ids[2]);
+
+        // A claimed task is no longer pending, so there is nothing to move.
+        assert!(!queue.bump_priority(&ids[2]).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn duplicate_copies_the_spec_into_a_new_pending_row() {
+        let queue = single_connection_memory_queue("owner").await;
+        let ids = enqueue_n(&queue, 1).await;
+        finish_next(&queue, TaskStatus::Done).await;
+
+        let copy_id = queue.duplicate(&ids[0]).await.unwrap();
+
+        let original = queue.fetch(&ids[0]).await.unwrap();
+        let copy = queue.fetch(&copy_id).await.unwrap();
+        assert_ne!(copy.id, original.id);
+        assert_eq!(copy.status, TaskStatus::Pending);
+        assert_eq!(copy.spec.symbol, original.spec.symbol);
+        assert_eq!(copy.spec.date, original.spec.date);
+        assert_eq!(copy.output_dir, original.output_dir);
+        assert!(copy.rows.is_none(), "a copy starts with no history");
     }
 
     async fn single_connection_memory_queue(owner_id: &str) -> Queue {

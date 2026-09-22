@@ -86,7 +86,7 @@
 </script>
 
 {#if app.consoleOpen}
-  <aside class="console" role="complementary" aria-label="Activity console">
+  <aside class="console" aria-label="Activity console">
     <header class="console-header">
       <div class="console-title-block">
         <span class="text-caption">Console</span>

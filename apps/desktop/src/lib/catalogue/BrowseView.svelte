@@ -473,7 +473,7 @@
 
     <!-- Cross-sell suggestion (post-queue) -->
     {#if suggestion}
-      <section class="cross-sell" role="region" aria-label="Suggested next download">
+      <section class="cross-sell" aria-label="Suggested next download">
         <div class="cross-sell-icon" aria-hidden="true">
           <Bookmark size={16} strokeWidth={1.75} />
         </div>

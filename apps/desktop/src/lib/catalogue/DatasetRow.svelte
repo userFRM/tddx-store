@@ -97,8 +97,8 @@
     }
   }
 
-  function handlePanelKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") {
+  function handleWindowKeydown(e: KeyboardEvent) {
+    if (expanded && e.key === "Escape") {
       expanded = false;
     }
   }
@@ -117,6 +117,8 @@
     return "tier-pill tier-" + t.toLowerCase();
   }
 </script>
+
+<svelte:window onkeydown={handleWindowKeydown} />
 
 <div
   class="dataset-row"
@@ -195,7 +197,6 @@
       class="row-panel"
       aria-label="Details for {entry.summary || entry.name}"
       tabindex="-1"
-      onkeydown={handlePanelKeydown}
     >
       <!-- Description -->
       {#if entry.description}

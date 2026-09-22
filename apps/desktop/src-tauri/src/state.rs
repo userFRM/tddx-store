@@ -5,7 +5,6 @@
 
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
-use tdds_core::queue::TaskStatus;
 use tdds_core::{Client, Queue, Task};
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
@@ -21,6 +20,11 @@ pub struct AppState {
     pub queue: RwLock<Option<Queue>>,
     pub client: RwLock<Option<Client>>,
     pub settings: RwLock<Settings>,
+    /// Last on-disk footprint reading, with the instant it was taken.
+    /// `snapshot` polls every 1.5s and the reading costs a full walk of
+    /// the output tree, so it is refreshed on a slower cadence than the
+    /// queue counts it travels with.
+    pub disk_usage: Mutex<Option<(std::time::Instant, DiskUsage)>>,
     /// Held by `commands::queue::run_queue` so a second click can't
     /// double-spawn workers. `JoinHandle` is `!Sync` only via inner
     /// state; `Mutex` keeps it safe across the await of `is_finished`.
@@ -40,11 +44,24 @@ pub struct Settings {
     /// Optional fallback if email/password not provided on connect.
     #[serde(default)]
     pub creds_path: String,
-    /// In-memory only. Not serialized to disk via this struct.
+    /// In-memory only. Not serialized to disk via this struct — the
+    /// vault owns persistence, and only on opt-in.
     #[serde(default, skip_serializing)]
     pub email: String,
     #[serde(default, skip_serializing)]
     pub password: String,
+    /// API key issued from the account portal. Set when the user signed
+    /// in with a key instead of email and password; mutually exclusive
+    /// with the pair above.
+    #[serde(default, skip_serializing)]
+    pub api_key: String,
+}
+
+/// Bytes and file count under the output directory.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DiskUsage {
+    pub bytes: u64,
+    pub files: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -66,13 +83,23 @@ pub struct TaskView {
     pub bytes: Option<i64>,
     pub error: Option<String>,
     pub attempts: i32,
+    /// Where this task writes. Sent so "open file location" has a path
+    /// to reveal without the UI reconstructing the naming scheme.
+    pub path: String,
 }
 
 impl From<Task> for TaskView {
     fn from(t: Task) -> Self {
+        let path = tdds_core::coverage::dataset_path(
+            std::path::Path::new(&t.output_dir),
+            &t.spec.kind,
+            &t.spec.symbol,
+            &t.spec.ymd(),
+            t.format.extension(),
+        );
         Self {
             id: t.id,
-            status: status_str(t.status).to_string(),
+            status: t.status.as_str().to_string(),
             kind: t.spec.kind.as_str().to_string(),
             symbol: t.spec.symbol,
             date: t.spec.date.format("%Y-%m-%d").to_string(),
@@ -80,17 +107,8 @@ impl From<Task> for TaskView {
             bytes: t.bytes,
             error: t.error,
             attempts: t.attempts,
+            path: path.to_string_lossy().into_owned(),
         }
-    }
-}
-
-pub fn status_str(s: TaskStatus) -> &'static str {
-    match s {
-        TaskStatus::Pending => "pending",
-        TaskStatus::Running => "running",
-        TaskStatus::Done => "done",
-        TaskStatus::Failed => "failed",
-        TaskStatus::Empty => "empty",
     }
 }
 

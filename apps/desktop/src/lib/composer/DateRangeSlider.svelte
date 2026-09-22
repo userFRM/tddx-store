@@ -179,7 +179,10 @@
          onpointermove={onPointerMove}
          onpointerup={onPointerUp}
          onpointercancel={onPointerUp}>
-      <div class="dr-track" bind:this={trackEl} onclick={onTrackClick}>
+      <!-- The track jumps the nearest handle to the clicked date. The
+           handles above are the keyboard interface, so this is a
+           pointer-only shortcut and is marked presentational. -->
+      <div class="dr-track" bind:this={trackEl} onclick={onTrackClick} role="presentation">
         <div class="dr-track-bg"></div>
         <div class="dr-track-fill"
              style:left="{pctOfIdx(startIdx)}%"
@@ -189,6 +192,7 @@
         <button
           type="button"
           class="dr-handle"
+          role="slider"
           class:dragging={dragging === "start"}
           style:left="{pctOfIdx(startIdx)}%"
           onpointerdown={(e) => onPointerDown("start", e)}
@@ -204,6 +208,7 @@
         <button
           type="button"
           class="dr-handle"
+          role="slider"
           class:dragging={dragging === "end"}
           style:left="{pctOfIdx(endIdx)}%"
           onpointerdown={(e) => onPointerDown("end", e)}

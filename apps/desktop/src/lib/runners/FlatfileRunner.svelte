@@ -96,7 +96,7 @@
               <option value="JSONL">JSON Lines</option>
             </select>
           </label>
-          <label class="field" />
+          <div class="field" aria-hidden="true"></div>
         </div>
         <label class="field">
           <span class="text-caption">Output path</span>

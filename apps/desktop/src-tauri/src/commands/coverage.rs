@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tauri::State;
-use tdds_core::coverage;
+use tdds_core::{coverage, format::OutputFormat, DataKind, DataSpec};
 
 use crate::state::AppState;
 
@@ -24,9 +24,70 @@ pub async fn coverage_report(
                 "bytes": c.bytes,
                 "first": c.dates.first().map(|d| d.format("%Y-%m-%d").to_string()),
                 "last": c.dates.last().map(|d| d.format("%Y-%m-%d").to_string()),
+                "format": c.format.extension(),
             })
         })
         .collect())
+}
+
+/// Queue the trading days in `kind`'s on-disk span for `symbol` that are
+/// not already downloaded.
+///
+/// The span is what the library already holds: first file to last file.
+/// Server truth for which days exist comes from the vendor, so a market
+/// holiday is never queued and never reported as a gap. Returns how many
+/// tasks were added.
+#[tauri::command]
+pub async fn requeue_missing_dates(
+    state: State<'_, Arc<AppState>>,
+    kind: String,
+    symbol: String,
+) -> Result<usize, String> {
+    let cfg = state.settings.read().await.clone();
+    let client = {
+        let g = state.client.read().await;
+        g.as_ref().ok_or("client not connected")?.clone()
+    };
+    let queue = {
+        let g = state.queue.read().await;
+        g.as_ref().ok_or("queue not opened")?.clone()
+    };
+    let data_kind = DataKind::parse(&kind).ok_or_else(|| format!("unknown dataset {kind}"))?;
+
+    let have = coverage::scan(&PathBuf::from(&cfg.output_dir))
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|c| c.kind == data_kind && c.symbol.eq_ignore_ascii_case(&symbol))
+        .ok_or_else(|| format!("nothing on disk for {symbol} {kind}"))?;
+    let (Some(start), Some(end)) = (have.dates.first().copied(), have.dates.last().copied()) else {
+        return Ok(0);
+    };
+    // Refill in whatever format the set already uses.
+    let format: OutputFormat = have.format;
+
+    let server_days = client
+        .trading_days(&symbol, start, end)
+        .await
+        .map_err(|e| e.to_string())?;
+    let gaps = coverage::missing(&server_days, &have.dates, start, end);
+
+    for date in &gaps {
+        let spec = DataSpec {
+            kind: data_kind.clone(),
+            symbol: symbol.clone(),
+            date: *date,
+            interval: None,
+            expiration: "*".into(),
+            strike: "*".into(),
+            right: "both".into(),
+            transforms: Default::default(),
+        };
+        queue
+            .enqueue(spec, format, &cfg.output_dir, 0)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(gaps.len())
 }
 
 /// Generates a DuckDB SQL bootstrap that scans the user's parquet

@@ -13,6 +13,14 @@ import { api, TAURI_AVAILABLE } from "$lib/api";
 const CLIENT_NAME = "tddx-store";
 const KEY_EMAIL = "creds.email";
 const KEY_PASSWORD = "creds.password";
+const KEY_API_KEY = "creds.api_key";
+
+/** What the user signed in with. Exactly one shape is stored: signing in
+ *  one way clears the other, so a stale credential can never be picked
+ *  up on the next launch. */
+export type StoredCredential =
+  | { email: string; password: string; apiKey?: undefined }
+  | { apiKey: string; email?: undefined; password?: undefined };
 
 let _strongholdPromise: Promise<{ sh: Stronghold; client: Client }> | null = null;
 
@@ -47,34 +55,47 @@ export const vault = {
    * keys. Without this, a sh.save() failure mid-write leaves a torn
    * vault on disk; the next launch reads an inconsistent state.
    */
-  async save(creds: { email: string; password: string }): Promise<void> {
+  async save(creds: StoredCredential): Promise<void> {
     const { sh, client } = await open();
     const store = client.getStore();
     // Snapshot prior values (may be empty) so we can attempt rollback
     // if the persist step fails. Stronghold doesn't expose transactional
     // boundaries, so this is best-effort.
-    const priorEmail    = await store.get(KEY_EMAIL).catch(() => null);
-    const priorPassword = await store.get(KEY_PASSWORD).catch(() => null);
+    const prior = {
+      [KEY_EMAIL]: await store.get(KEY_EMAIL).catch(() => null),
+      [KEY_PASSWORD]: await store.get(KEY_PASSWORD).catch(() => null),
+      [KEY_API_KEY]: await store.get(KEY_API_KEY).catch(() => null),
+    };
+    // Whichever method was not used is removed, so the next launch can
+    // never auto-connect with a credential the user replaced.
+    const next: Record<string, string | null> =
+      creds.apiKey !== undefined
+        ? { [KEY_API_KEY]: creds.apiKey, [KEY_EMAIL]: null, [KEY_PASSWORD]: null }
+        : { [KEY_EMAIL]: creds.email, [KEY_PASSWORD]: creds.password, [KEY_API_KEY]: null };
     try {
-      await store.insert(KEY_EMAIL,    Array.from(enc.encode(creds.email)));
-      await store.insert(KEY_PASSWORD, Array.from(enc.encode(creds.password)));
+      for (const [key, value] of Object.entries(next)) {
+        if (value === null) await store.remove(key).catch(() => {});
+        else await store.insert(key, Array.from(enc.encode(value)));
+      }
       await sh.save();
     } catch (e) {
       try {
-        if (priorEmail)    await store.insert(KEY_EMAIL,    Array.from(priorEmail));
-        else                await store.remove(KEY_EMAIL).catch(() => {});
-        if (priorPassword) await store.insert(KEY_PASSWORD, Array.from(priorPassword));
-        else                await store.remove(KEY_PASSWORD).catch(() => {});
+        for (const [key, value] of Object.entries(prior)) {
+          if (value) await store.insert(key, Array.from(value));
+          else await store.remove(key).catch(() => {});
+        }
         await sh.save().catch(() => {});
       } catch {/* rollback best-effort */}
       throw e;
     }
   },
 
-  async load(): Promise<{ email: string; password: string } | null> {
+  async load(): Promise<StoredCredential | null> {
     try {
       const { client } = await open();
       const store = client.getStore();
+      const k = await store.get(KEY_API_KEY).catch(() => null);
+      if (k) return { apiKey: dec.decode(new Uint8Array(k)) };
       const e = await store.get(KEY_EMAIL).catch(() => null);
       const p = await store.get(KEY_PASSWORD).catch(() => null);
       if (!e || !p) return null;
@@ -91,8 +112,9 @@ export const vault = {
     try {
       const { sh, client } = await open();
       const store = client.getStore();
-      await store.remove(KEY_EMAIL).catch(() => {});
-      await store.remove(KEY_PASSWORD).catch(() => {});
+      for (const key of [KEY_EMAIL, KEY_PASSWORD, KEY_API_KEY]) {
+        await store.remove(key).catch(() => {});
+      }
       await sh.save();
     } catch {
       /* nothing to clear */

@@ -570,6 +570,12 @@ async function _pollOnce() {
   }
 }
 
+/** Pull a fresh snapshot now. Row actions call this so the list reflects
+ *  the change on the click rather than up to a poll interval later. */
+export async function refreshQueueSnapshot() {
+  await _pollOnce();
+}
+
 // ── Connection ───────────────────────────────────────────────
 export async function connect() {
   app.connState = "connecting";

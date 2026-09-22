@@ -92,7 +92,8 @@
 {#if app.presetOpen && app.presetSelected}
   <div class="backdrop" onclick={closeIndexPreset} role="presentation">
     <div class="card" onclick={(e) => e.stopPropagation()}
-         role="dialog" aria-modal="true" tabindex="-1">
+         role="dialog" aria-modal="true" tabindex="-1"
+         onkeydown={(e) => e.key === "Escape" && closeIndexPreset()}>
       <header class="head">
         <div>
           <span class="text-caption">Bulk queue · index ecosystem</span>

@@ -59,6 +59,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that surfaced only two of the four.
 - `sdk_version` and the Health panel no longer report a `tdbe` version
   for a crate that no longer exists.
+- **A task whose file was already on disk was marked "empty"**, which is
+  the status meaning the server returned no rows. The two outcomes are
+  now distinct.
+- **`dataset_metadata` could never succeed**: the UI sent `name` where
+  the command took `operation_id`. It had no callers, so it is gone
+  along with the lookup behind it.
+- **The queue snapshot walked the entire output directory every 1.5
+  seconds.** The footprint reading is now cached for 15 seconds; with a
+  few thousand files that walk was the most expensive thing the app did
+  at rest.
+- **`cancel_many` mixed numbered and anonymous SQL placeholders**, so
+  its bind positions depended on SQLite numbering rules rather than the
+  text. Caught by the new bulk-operation tests.
+- The index-preset modal had no Escape-to-close, unlike every other
+  modal in the app.
+- Accessibility: clickable cards wrapped nested buttons in
+  `role="button"`, the date-range handles carried slider ARIA on a
+  button role, both sign-in forms were `<div>`s with a keydown handler
+  instead of `<form>`s, and the command palette never pointed at its
+  active option. `svelte-check` reports 0 errors and 0 warnings, from 1
+  and 28.
 
 ### Changed
 
@@ -81,10 +102,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **API-key sign-in.** ThetaData accepts either credential; the app now
+  does too, with a method switch on the login screen and the key stored
+  in the same encrypted vault. `THETADATA_API_KEY` in the environment
+  signs in without typing anything.
+- **A queue you can work with.** Checkbox selection with shift-click
+  ranges, a select-all-visible header box, a bulk action bar (move to
+  front, duplicate, retry, cancel, remove), a text filter over symbol,
+  dataset and date, and "Clear finished". Bulk actions run in SQL
+  against the whole queue rather than looping over the loaded page.
+- **Row actions that act.** Cancel, move-to-front, duplicate and
+  show-file were rendered as buttons with no handler attached; same for
+  the Library's "re-run missing dates" and "open output directory".
+  All six do their job now, and the library one queues exactly the
+  trading days missing from a set's own span.
 - `flatfile_datasets` and `interval_options` commands, so the UI reads
   both lists from the source of truth instead of keeping its own.
-- Tests for schedule cadence and fire-time, and for interval
-  normalisation against the SDK's own enum.
+- Tests for the bulk queue operations, schedule cadence and fire-time,
+  and interval normalisation against the SDK's own enum.
 
 ### Notes
 

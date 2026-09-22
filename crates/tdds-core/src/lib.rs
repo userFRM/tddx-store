@@ -42,7 +42,7 @@ pub use tier::{
 };
 pub use transform::Transforms;
 pub use worker::Pool;
-pub use yaml_meta::{catalogue as endpoint_catalogue, endpoint_meta, EndpointMeta};
+pub use yaml_meta::{catalogue as endpoint_catalogue, EndpointMeta};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

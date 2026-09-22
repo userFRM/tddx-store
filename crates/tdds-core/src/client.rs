@@ -1,5 +1,14 @@
-//! Thin wrapper around `thetadatadx::Client` with a creds path that
-//! falls through env (`DATADOCK_CREDS`), explicit override, then default.
+//! Thin wrapper around `thetadatadx::Client`.
+//!
+//! ThetaData accepts either an API key or an email and password, and so
+//! does this app. A key is the better credential for a downloader: it is
+//! revocable from the account portal without changing the password, and
+//! it is the only form the `THETADATA_API_KEY` environment variable
+//! carries.
+//!
+//! Sourcing order when no credential is supplied inline:
+//! `THETADATA_API_KEY`, then the two-line `creds.txt` at `creds_path`
+//! (or `DATADOCK_CREDS`, or `./creds.txt`).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -13,8 +22,11 @@ pub struct Client {
 }
 
 impl Client {
-    /// Connect with credentials from `creds_path` (or `DATADOCK_CREDS` env,
-    /// or `./creds.txt`). rustls crypto provider is installed on first call.
+    /// Connect with whatever credential the environment or `creds_path`
+    /// supplies. `THETADATA_API_KEY` wins when it is set and non-empty;
+    /// otherwise the two-line email + password file is read.
+    ///
+    /// The rustls crypto provider is installed on first call.
     pub async fn connect(creds_path: Option<&Path>) -> crate::Result<Self> {
         Self::install_crypto();
         let path: PathBuf = match creds_path {
@@ -24,15 +36,21 @@ impl Client {
                 Err(_) => PathBuf::from("creds.txt"),
             },
         };
-        let creds = Credentials::from_file(&path)?;
+        let creds = Credentials::from_env_or_file(&path)?;
         Self::connect_with(creds).await
     }
 
     /// Connect with explicit email + password (no file involved).
-    /// Used by the GUI login form.
     pub async fn connect_with_credentials(email: &str, password: &str) -> crate::Result<Self> {
         Self::install_crypto();
         let creds = Credentials::new(email, password);
+        Self::connect_with(creds).await
+    }
+
+    /// Connect with an API key issued from the ThetaData account portal.
+    pub async fn connect_with_api_key(api_key: &str) -> crate::Result<Self> {
+        Self::install_crypto();
+        let creds = Credentials::api_key(api_key);
         Self::connect_with(creds).await
     }
 

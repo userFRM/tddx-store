@@ -198,6 +198,7 @@
   >
     <div
       class="composer"
+      tabindex="-1"
       bind:this={dialogEl}
       role="dialog"
       aria-modal="true"

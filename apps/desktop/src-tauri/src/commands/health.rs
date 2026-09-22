@@ -13,7 +13,7 @@ use serde::Serialize;
 use tauri::State;
 use tdds_core::coverage;
 
-use crate::state::{status_str, AppState};
+use crate::state::AppState;
 
 /// Process-wide boot timestamp for uptime reporting. Set by `lib::run`
 /// in the Tauri setup hook so the value is anchored to the moment the
@@ -51,7 +51,7 @@ pub async fn health(
     if let Some(queue) = queue_opt.as_ref() {
         if let Ok(counts) = queue.counts().await {
             for (s, n) in counts {
-                task_counts.insert(status_str(s).to_string(), n);
+                task_counts.insert(s.as_str().to_string(), n);
             }
         }
     }

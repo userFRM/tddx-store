@@ -46,12 +46,15 @@
   {:else}
     <div class="grid">
       {#each presets as p (p.id)}
-        <article class="card" onclick={() => openIndexPreset(p)} role="button" tabindex="0"
-                 onkeydown={(e) => e.key === "Enter" && openIndexPreset(p)}>
+        <article class="card">
           <div class="head">
             <span class="id-pill text-mono">{p.id.toUpperCase()}</span>
           </div>
-          <h3 class="t">{p.name}</h3>
+          <h3 class="t">
+            <button type="button" class="card-open" onclick={() => openIndexPreset(p)}>
+              {p.name}
+            </button>
+          </h3>
           <p class="desc">{p.description}</p>
           <div class="foot">
             <span class="hint text-caption">Bulk-queue all constituents</span>
@@ -102,6 +105,29 @@
     grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
     gap: var(--sp-3);
   }
+  /* Block-link pattern: the card is a plain container and the title
+     button stretches over it, so the whole surface is clickable
+     without wrapping nested buttons in a role="button". */
+  .card { position: relative; }
+  .card-open {
+    all: unset;
+    cursor: pointer;
+    display: block;
+    font: inherit;
+    color: inherit;
+  }
+  .card-open::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+  }
+  .card:has(.card-open:focus-visible) {
+    border-color: var(--accent);
+    box-shadow: var(--shadow-glow-accent);
+  }
+  .foot { position: relative; z-index: 1; }
+
   .card {
     background: var(--surface-1);
     border: 1px solid var(--border);

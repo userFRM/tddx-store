@@ -132,63 +132,61 @@ async fn run_worker(
             let mut p = progress.lock().await;
             p.running = p.running.saturating_sub(1);
             match &res {
-                Ok((rows, bytes)) => {
-                    if *rows > 0 {
-                        p.completed += 1;
-                        p.rows_written += *rows as u64;
-                        p.bytes_written += *bytes;
-                    }
+                Ok(Outcome::Written { rows, bytes }) => {
+                    p.completed += 1;
+                    p.rows_written += *rows as u64;
+                    p.bytes_written += *bytes;
                 }
+                Ok(Outcome::AlreadyOnDisk { .. }) => p.completed += 1,
+                Ok(Outcome::NoData) => {}
                 Err(_) => p.failed += 1,
             }
         }
-        // mark_*() returns Ok(true) when it actually
-        // updated a row, Ok(false) when the row was no
-        // longer `running` (cancelled by the user via
-        // queue::cancel) so the worker should NOT clobber
-        // the cancelled state. SQL errors propagate via
-        // `tracing::error!` because retry logic is
-        // outside the per-row scope.
+        // mark_*() returns Ok(true) when it actually updated a row,
+        // Ok(false) when the row was no longer `running` (cancelled by
+        // the user via queue::cancel), so the worker must not clobber
+        // the cancelled state. SQL errors are logged here because retry
+        // lives outside the per-row scope.
         match res {
-            Ok((0, _ms)) => match queue.mark_empty(&task.id).await {
-                Ok(true) => {
-                    if let Some(tx) = &tx {
-                        let _ = tx
-                            .send(ProgressEvent::Empty {
-                                task_id: task.id.clone(),
-                                millis: 0,
-                            })
-                            .await;
+            Ok(outcome) => match outcome.recorded() {
+                None => match queue.mark_empty(&task.id).await {
+                    Ok(true) => {
+                        if let Some(tx) = &tx {
+                            let _ = tx
+                                .send(ProgressEvent::Empty {
+                                    task_id: task.id.clone(),
+                                    millis: 0,
+                                })
+                                .await;
+                        }
                     }
-                }
-                Ok(false) => {
-                    tracing::info!(
+                    Ok(false) => tracing::info!(
                         task_id = %task.id,
                         "task cancelled mid-flight; skipping mark_empty"
-                    );
-                }
-                Err(e) => tracing::error!(?e, task_id = %task.id, "mark_empty"),
-            },
-            Ok((rows, bytes)) => match queue.mark_done(&task.id, rows as i64, bytes as i64).await {
-                Ok(true) => {
-                    if let Some(tx) = &tx {
-                        let _ = tx
-                            .send(ProgressEvent::Done {
-                                task_id: task.id.clone(),
-                                rows: rows as u64,
-                                bytes,
-                                millis: 0,
-                            })
-                            .await;
+                    ),
+                    Err(e) => tracing::error!(?e, task_id = %task.id, "mark_empty"),
+                },
+                Some((rows, bytes)) => {
+                    match queue.mark_done(&task.id, rows as i64, bytes as i64).await {
+                        Ok(true) => {
+                            if let Some(tx) = &tx {
+                                let _ = tx
+                                    .send(ProgressEvent::Done {
+                                        task_id: task.id.clone(),
+                                        rows: rows as u64,
+                                        bytes,
+                                        millis: 0,
+                                    })
+                                    .await;
+                            }
+                        }
+                        Ok(false) => tracing::info!(
+                            task_id = %task.id,
+                            "task cancelled mid-flight; skipping mark_done"
+                        ),
+                        Err(e) => tracing::error!(?e, task_id = %task.id, "mark_done"),
                     }
                 }
-                Ok(false) => {
-                    tracing::info!(
-                        task_id = %task.id,
-                        "task cancelled mid-flight; skipping mark_done"
-                    );
-                }
-                Err(e) => tracing::error!(?e, task_id = %task.id, "mark_done"),
             },
             Err(e) => {
                 let msg = e.to_string();
@@ -204,12 +202,10 @@ async fn run_worker(
                                 .await;
                         }
                     }
-                    Ok(false) => {
-                        tracing::info!(
-                            task_id = %task.id,
-                            "task already terminal; not marking failed"
-                        );
-                    }
+                    Ok(false) => tracing::info!(
+                        task_id = %task.id,
+                        "task already terminal; not marking failed"
+                    ),
                     Err(e) => tracing::error!(?e, task_id = %task.id, "mark_failed"),
                 }
             }
@@ -257,7 +253,33 @@ fn spawn_heartbeat(queue: Queue, task_id: String) -> HeartbeatGuard {
     }
 }
 
-async fn run_one(client: &Client, task: &Task) -> crate::Result<(usize, u64)> {
+/// What a single task did. Kept explicit because "wrote nothing"
+/// and "the file was already there" are different facts, and collapsing
+/// them into `rows == 0` reported every re-run of an existing file as
+/// though the server had returned no data.
+enum Outcome {
+    /// Rows came back and were written.
+    Written { rows: usize, bytes: u64 },
+    /// The file was already on disk, so nothing was fetched.
+    AlreadyOnDisk { bytes: u64 },
+    /// The server returned no rows for this request.
+    NoData,
+}
+
+impl Outcome {
+    /// The `(rows, bytes)` to record against the task, or `None` when
+    /// the request genuinely came back with nothing and the row should
+    /// be marked empty rather than done.
+    fn recorded(&self) -> Option<(usize, u64)> {
+        match *self {
+            Outcome::Written { rows, bytes } => Some((rows, bytes)),
+            Outcome::AlreadyOnDisk { bytes } => Some((0, bytes)),
+            Outcome::NoData => None,
+        }
+    }
+}
+
+async fn run_one(client: &Client, task: &Task) -> crate::Result<Outcome> {
     let out_dir = Path::new(&task.output_dir);
     let path = dataset_path(
         out_dir,
@@ -268,7 +290,7 @@ async fn run_one(client: &Client, task: &Task) -> crate::Result<(usize, u64)> {
     );
     if path.exists() {
         let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        return Ok((0, bytes));
+        return Ok(Outcome::AlreadyOnDisk { bytes });
     }
 
     // One dispatch path for every kind: `DataSpec` lowers onto the same
@@ -276,18 +298,12 @@ async fn run_one(client: &Client, task: &Task) -> crate::Result<(usize, u64)> {
     // wire coercion, and Arrow column projection are identical whichever
     // surface queued the task.
     let batch = crate::registry::dispatch_to_arrow(client, &task.spec.to_endpoint_spec()).await?;
-    let rows = match batch {
-        Some(b) if b.num_rows() > 0 => {
-            let b2 = task.spec.transforms.apply(&b)?;
-            write_batch(&b2, &path, task.format)?;
-            b.num_rows()
-        }
-        _ => 0,
+    let Some(batch) = batch.filter(|b| b.num_rows() > 0) else {
+        return Ok(Outcome::NoData);
     };
-    let bytes = if rows > 0 {
-        std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
-    } else {
-        0
-    };
-    Ok((rows, bytes))
+    let rows = batch.num_rows();
+    let transformed = task.spec.transforms.apply(&batch)?;
+    write_batch(&transformed, &path, task.format)?;
+    let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    Ok(Outcome::Written { rows, bytes })
 }

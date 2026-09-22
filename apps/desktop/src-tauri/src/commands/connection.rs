@@ -2,8 +2,8 @@
 //!
 //! `connect` opens the SQLite queue + builds a `tdds_core::Client` and
 //! commits both into `AppState` atomically (caller never observes a
-//! half-initialised state). `login` is the email/password variant the
-//! GUI uses — it persists the credentials in-memory and delegates.
+//! half-initialised state). `login` takes whichever credential the user
+//! signed in with, holds it in memory for the session, and delegates.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -31,7 +31,13 @@ pub async fn connect(state: State<'_, Arc<AppState>>) -> Result<String, String> 
     let queue = Queue::open(&PathBuf::from(&cfg.db_path))
         .await
         .map_err(|e| e.to_string())?;
-    let client = if !cfg.email.is_empty() && !cfg.password.is_empty() {
+    // An API key entered this session wins, then email + password, then
+    // whatever `THETADATA_API_KEY` or the creds file supplies.
+    let client = if !cfg.api_key.is_empty() {
+        Client::connect_with_api_key(&cfg.api_key)
+            .await
+            .map_err(|e| e.to_string())?
+    } else if !cfg.email.is_empty() && !cfg.password.is_empty() {
         Client::connect_with_credentials(&cfg.email, &cfg.password)
             .await
             .map_err(|e| e.to_string())?
@@ -67,20 +73,33 @@ pub async fn connect(state: State<'_, Arc<AppState>>) -> Result<String, String> 
     Ok("connected".into())
 }
 
+/// How the user signed in. Tagged rather than a bag of optional fields
+/// so "an API key and a blank password" is not representable.
 #[derive(Deserialize)]
-pub struct LoginArgs {
-    pub email: String,
-    pub password: String,
+#[serde(tag = "method", rename_all = "snake_case")]
+pub enum LoginArgs {
+    Password { email: String, password: String },
+    ApiKey { api_key: String },
 }
 
-/// Direct email/password login. Stores credentials in memory and
-/// delegates to `connect`. Replaces the creds-file flow for the GUI.
+/// Sign in and connect. Holds the credential in memory for the session
+/// (never in the serialized settings) and delegates to `connect`.
 #[tauri::command]
 pub async fn login(state: State<'_, Arc<AppState>>, args: LoginArgs) -> Result<String, String> {
     {
         let mut s = state.settings.write().await;
-        s.email = args.email.clone();
-        s.password = args.password.clone();
+        // Clear the other method's fields so a second sign-in cannot
+        // connect with a credential the user thinks they replaced.
+        s.email.clear();
+        s.password.clear();
+        s.api_key.clear();
+        match args {
+            LoginArgs::Password { email, password } => {
+                s.email = email;
+                s.password = password;
+            }
+            LoginArgs::ApiKey { api_key } => s.api_key = api_key,
+        }
     }
     connect(state).await
 }
@@ -112,6 +131,7 @@ pub async fn logout(state: State<'_, Arc<AppState>>) -> Result<(), String> {
         let mut s = state.settings.write().await;
         s.email.clear();
         s.password.clear();
+        s.api_key.clear();
     }
     Ok(())
 }

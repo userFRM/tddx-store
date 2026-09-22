@@ -14,6 +14,7 @@
     EyeOff,
     AlertCircle,
     Loader2,
+    KeyRound,
   } from "lucide-svelte";
   import {
     app,
@@ -27,23 +28,39 @@
   import { api, TAURI_AVAILABLE } from "$lib/api";
   import { vault } from "$lib/persistence/vault";
 
+  /** ThetaData accepts either credential. A key is revocable from the
+   *  account portal without changing the password, so it is the better
+   *  one to leave sitting in a downloader. */
+  type Method = "password" | "api_key";
+
+  let method = $state<Method>("password");
   let email = $state("");
   let password = $state("");
+  let apiKey = $state("");
   let remember = $state(true);
-  let showPw = $state(false);
+  let showSecret = $state(false);
   let signingIn = $state(false);
+
+  const ready = $derived(
+    method === "password" ? Boolean(email && password) : Boolean(apiKey),
+  );
 
   onMount(async () => {
     await loadSettings();
-    // Try to load creds from the encrypted Stronghold vault first; fall
-    // back to in-memory settings (rarely populated unless the user just
-    // typed them and we crashed before vault save completed).
+    // Try the encrypted vault first; fall back to in-memory settings,
+    // which are only populated when the user just typed them and the
+    // vault write had not landed yet.
     const stored = await vault.load().catch(() => null);
-    if (stored) {
+    if (stored?.apiKey) {
+      method = "api_key";
+      apiKey = stored.apiKey;
+      remember = true;
+      await trySignIn(/* fromAuto */ true);
+    } else if (stored?.email && stored.password) {
       email = stored.email;
       password = stored.password;
       remember = true;
-      await trySignIn(/* fromAuto */ true);
+      await trySignIn(true);
     } else if (app.settings.email && app.settings.password) {
       email = app.settings.email;
       password = app.settings.password;
@@ -55,37 +72,45 @@
   });
 
   async function trySignIn(fromAuto = false) {
-    if (!email || !password) {
+    if (!ready) {
       app.connState = "error";
-      app.connMsg = "Email and password required";
+      app.connMsg =
+        method === "password" ? "Email and password required" : "API key required";
       return;
     }
     signingIn = true;
     app.connState = "connecting";
     app.connMsg = fromAuto ? "Auto-signing in…" : "Signing in…";
     try {
-      app.settings.email = email;
-      app.settings.password = remember ? password : "";
-      await api.settingsSet(app.settings);
-      await api.login({ email, password });
-      app.connState = "connected";
-      app.connMsg = `Signed in as ${email}`;
-      log("info", `Signed in as ${email}`);
-      // Persist (encrypted) on opt-in.
-      if (remember) {
-        await vault.save({ email, password }).catch((e) =>
-          log("warn", `vault save failed: ${e}`),
-        );
+      if (method === "password") {
+        app.settings.email = email;
+        app.settings.password = remember ? password : "";
+        await api.settingsSet(app.settings);
+        await api.login({ method: "password", email, password });
       } else {
-        await vault.clear().catch(() => {});
+        await api.login({ method: "api_key", api_key: apiKey });
       }
+      app.connState = "connected";
+      app.connMsg = method === "password" ? `Signed in as ${email}` : "Signed in with API key";
+      log("info", app.connMsg);
+
+      // Everything the UI needs is already in hand: the tiers came back
+      // with the auth response. Fire these before touching the vault,
+      // which opens and re-encrypts an on-disk snapshot and took long
+      // enough to leave the tier badges blank for seconds.
       startQueuePoll();
-      warmCaches();           // pre-load symbol / root lists for autocomplete
-      // Populate per-asset-class tier badges (Home + topbar) — login
-      // is the only handshake where the SDK knows the user's tiers.
+      warmCaches();
       refreshTierStatus();
-      // Don't keep the password in component state once connected.
+
+      // Persist (encrypted) on opt-in, without blocking the UI on it.
+      const credential = method === "password" ? { email, password } : { apiKey };
+      void (remember
+        ? vault.save(credential).catch((e) => log("warn", `vault save failed: ${e}`))
+        : vault.clear().catch(() => {}));
+
+      // Don't keep the secret in component state once connected.
       password = "";
+      apiKey = "";
     } catch (e: unknown) {
       app.connState = "error";
       app.connMsg = e instanceof Error ? e.message : String(e);
@@ -95,8 +120,9 @@
     }
   }
 
-  function onKey(e: KeyboardEvent) {
-    if (e.key === "Enter") trySignIn();
+  function onSubmit(e: SubmitEvent) {
+    e.preventDefault();
+    void trySignIn();
   }
 
   // Show the gate until we're connected. While connecting (auto path),
@@ -114,44 +140,98 @@
       <h1 class="gate-title">Sign in to ThetaData</h1>
       <p class="gate-sub">Streams market data using your ThetaData account.</p>
 
-      <div class="gate-form" role="group" onkeydown={onKey}>
-        <label class="field-stack">
-          <span class="text-caption">Email</span>
-          <div class="input-with-icon">
-            <Mail size={14} class="input-icon" />
-            <input
-              class="field-input padded"
-              type="email"
-              autocomplete="username"
-              placeholder="you@example.com"
-              bind:value={email}
-              disabled={signingIn}
-            />
-          </div>
-        </label>
+      <form class="gate-form" onsubmit={onSubmit}>
+        <div class="method-switch" role="radiogroup" aria-label="Sign-in method">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={method === "password"}
+            class:active={method === "password"}
+            onclick={() => (method = "password")}
+            disabled={signingIn}
+          >
+            Email and password
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={method === "api_key"}
+            class:active={method === "api_key"}
+            onclick={() => (method = "api_key")}
+            disabled={signingIn}
+          >
+            API key
+          </button>
+        </div>
 
-        <label class="field-stack">
-          <span class="text-caption">Password</span>
-          <div class="input-with-icon">
-            <Lock size={14} class="input-icon" />
-            <input
-              class="field-input padded with-trailing"
-              type={showPw ? "text" : "password"}
-              autocomplete="current-password"
-              placeholder="••••••••••••"
-              bind:value={password}
-              disabled={signingIn}
-            />
-            <button
-              type="button"
-              class="trailing-btn"
-              aria-label={showPw ? "Hide password" : "Show password"}
-              onclick={() => (showPw = !showPw)}
-            >
-              {#if showPw}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
-            </button>
-          </div>
-        </label>
+        {#if method === "password"}
+          <label class="field-stack">
+            <span class="text-caption">Email</span>
+            <div class="input-with-icon">
+              <Mail size={14} class="input-icon" />
+              <input
+                class="field-input padded"
+                type="email"
+                autocomplete="username"
+                placeholder="you@example.com"
+                bind:value={email}
+                disabled={signingIn}
+              />
+            </div>
+          </label>
+
+          <label class="field-stack">
+            <span class="text-caption">Password</span>
+            <div class="input-with-icon">
+              <Lock size={14} class="input-icon" />
+              <input
+                class="field-input padded with-trailing"
+                type={showSecret ? "text" : "password"}
+                autocomplete="current-password"
+                placeholder="••••••••••••"
+                bind:value={password}
+                disabled={signingIn}
+              />
+              <button
+                type="button"
+                class="trailing-btn"
+                aria-label={showSecret ? "Hide password" : "Show password"}
+                onclick={() => (showSecret = !showSecret)}
+              >
+                {#if showSecret}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
+              </button>
+            </div>
+          </label>
+        {:else}
+          <label class="field-stack">
+            <span class="text-caption">API key</span>
+            <div class="input-with-icon">
+              <KeyRound size={14} class="input-icon" />
+              <input
+                class="field-input padded with-trailing text-mono"
+                type={showSecret ? "text" : "password"}
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="Paste the key from your account portal"
+                bind:value={apiKey}
+                disabled={signingIn}
+              />
+              <button
+                type="button"
+                class="trailing-btn"
+                aria-label={showSecret ? "Hide API key" : "Show API key"}
+                onclick={() => (showSecret = !showSecret)}
+              >
+                {#if showSecret}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
+              </button>
+            </div>
+            <span class="field-hint text-body-sm fg-muted">
+              Generate one in the ThetaData account portal. Setting
+              <code>THETADATA_API_KEY</code> in the environment signs you in
+              without typing it here.
+            </span>
+          </label>
+        {/if}
 
         <label class="remember">
           <input type="checkbox" bind:checked={remember} disabled={signingIn} />
@@ -176,9 +256,9 @@
         {/if}
 
         <button
+          type="submit"
           class="btn btn-primary gate-btn"
-          onclick={() => trySignIn()}
-          disabled={signingIn || !email || !password || !TAURI_AVAILABLE}
+          disabled={signingIn || !ready || !TAURI_AVAILABLE}
         >
           {#if signingIn}
             <Loader2 class="spin" size={14} />
@@ -192,7 +272,7 @@
         <p class="gate-hint">
           Don't have an account? <a href="https://thetadata.net/pricing" target="_blank" rel="noreferrer">Sign up at thetadata.net</a>.
         </p>
-      </div>
+      </form>
     </div>
   </div>
 {/if}
@@ -226,6 +306,38 @@
     gap: var(--sp-2);
     margin-bottom: var(--sp-2);
   }
+  .method-switch {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px;
+    padding: 2px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+  }
+  .method-switch button {
+    padding: 6px var(--sp-2);
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--fg-muted);
+    font-size: var(--text-body-sm);
+    font-weight: var(--weight-medium);
+    cursor: pointer;
+    transition: background var(--dur-fast) var(--ease-standard),
+                color var(--dur-fast) var(--ease-standard);
+  }
+  .method-switch button:hover:not(.active) { color: var(--fg); }
+  .method-switch button.active {
+    background: var(--surface-1);
+    color: var(--fg);
+    box-shadow: var(--shadow-flat);
+  }
+  .field-hint code {
+    font-family: var(--font-mono);
+    font-size: var(--text-caption);
+  }
+
   .brand-logo {
     display: block;
     /* The wordmark's second half inherits this colour. */

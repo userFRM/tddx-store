@@ -98,7 +98,7 @@
   </div>
 
   <!-- Tabs -->
-  <nav class="tab-bar" role="tablist">
+  <div class="tab-bar" role="tablist">
     {#each (["schema", "sample", "coverage", "settings"] as DetailTab[]) as tab}
       <button
         role="tab"
@@ -110,7 +110,7 @@
         {tab.charAt(0).toUpperCase() + tab.slice(1)}
       </button>
     {/each}
-  </nav>
+  </div>
 
   <!-- Tab content -->
   <div class="tab-content" role="tabpanel">

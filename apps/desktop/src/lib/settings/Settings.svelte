@@ -66,7 +66,7 @@
       app.settings.email = email;
       app.settings.password = password;
       await api.settingsSet(app.settings);
-      await api.login({ email, password });
+      await api.login({ method: "password", email, password });
       app.connState = "connected";
       app.connMsg = `Signed in as ${email}`;
       startQueuePoll();
@@ -109,8 +109,9 @@
     }
   }
 
-  function onLoginKey(e: KeyboardEvent) {
-    if (e.key === "Enter") signIn();
+  function onLoginSubmit(e: SubmitEvent) {
+    e.preventDefault();
+    void signIn();
   }
 </script>
 
@@ -145,7 +146,7 @@
           </button>
         </div>
       {:else}
-        <div class="login-form" onkeydown={onLoginKey} role="group">
+        <form class="login-form" onsubmit={onLoginSubmit}>
           <label class="field-stack">
             <span class="text-caption">Email</span>
             <div class="input-with-icon">
@@ -190,8 +191,8 @@
           {/if}
 
           <button
+            type="submit"
             class="btn btn-primary login-btn"
-            onclick={signIn}
             disabled={signingIn || !email || !password}
           >
             <LogIn size={14} />
@@ -202,7 +203,7 @@
             ThetaData credentials. Stored in app memory only — never written
             to disk by the app.
           </p>
-        </div>
+        </form>
       {/if}
     </section>
 

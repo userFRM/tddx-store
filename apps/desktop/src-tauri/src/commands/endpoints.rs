@@ -7,8 +7,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use tdds_core::{
-    all_endpoints, dispatch_to_file, endpoint_catalogue, endpoint_meta, find_endpoint,
-    format::OutputFormat, EndpointInfo, EndpointMeta, EndpointSpec, IntervalOption, INTERVALS,
+    all_endpoints, dispatch_to_file, endpoint_catalogue, find_endpoint, format::OutputFormat,
+    EndpointInfo, EndpointMeta, EndpointSpec, IntervalOption, INTERVALS,
 };
 
 use crate::state::AppState;
@@ -149,9 +149,4 @@ pub async fn dataset_catalogue() -> Result<Vec<CatalogueEntry>, String> {
         });
     }
     Ok(out)
-}
-
-#[tauri::command]
-pub async fn dataset_metadata(operation_id: String) -> Result<Option<EndpointMeta>, String> {
-    Ok(endpoint_meta(&operation_id))
 }
