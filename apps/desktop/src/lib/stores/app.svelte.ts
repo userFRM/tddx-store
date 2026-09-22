@@ -689,8 +689,48 @@ export function hasAnyGatedDatasets(): boolean {
 }
 
 // ── Composer helpers ─────────────────────────────────────────
+// ── Per-dataset output format ────────────────────────────────────
+//
+// The Detail view offers a default format per dataset. It is stored
+// here and applied whenever that dataset is queued, so the setting is
+// the promise it makes rather than a control bound to nothing.
+
+/** The formats the writer supports. Anything else is not renderable. */
+export type OutputFormat = "parquet" | "csv" | "jsonl" | "json";
+const OUTPUT_FORMATS: OutputFormat[] = ["parquet", "csv", "jsonl", "json"];
+
+const DATASET_FORMAT_KEY = "tdds.datasetFormats";
+let datasetFormats = $state<Record<string, OutputFormat>>({});
+
+/** Load the remembered formats. Called once on launch. */
+export async function loadDatasetFormats() {
+  const stored = (await kvGet<Record<string, string>>(DATASET_FORMAT_KEY)) ?? {};
+  // A hand-edited or downgraded store could hold anything; keep only
+  // what the writer can actually produce.
+  datasetFormats = Object.fromEntries(
+    Object.entries(stored).filter(([, v]) => isOutputFormat(v)),
+  ) as Record<string, OutputFormat>;
+}
+
+function isOutputFormat(value: string): value is OutputFormat {
+  return (OUTPUT_FORMATS as string[]).includes(value);
+}
+
+export function datasetFormatFor(datasetId: string): OutputFormat {
+  return datasetFormats[datasetId] ?? "parquet";
+}
+
+export function rememberDatasetFormat(datasetId: string, format: string) {
+  if (!isOutputFormat(format)) return;
+  datasetFormats = { ...datasetFormats, [datasetId]: format };
+  void kvSet(DATASET_FORMAT_KEY, datasetFormats);
+}
+
 export function openComposer(dataset: DatasetMeta | null) {
   app.composer.anchorDataset = dataset;
+  // Open on the format this dataset was last saved with, so the quick
+  // add and the composer agree with the Detail view's setting.
+  if (dataset) app.composer.format = datasetFormatFor(dataset.id);
   app.composer.open = true;
   app.composer.status = "idle";
   app.composer.msg = "";

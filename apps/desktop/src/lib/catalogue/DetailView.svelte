@@ -13,7 +13,11 @@
     type DatasetMeta,
   } from "$lib/stores/app.svelte";
   import { api, fmtBytes, fmtNum, type Coverage } from "$lib/api";
-  import { composer } from "$lib/stores/app.svelte";
+  import {
+    composer,
+    datasetFormatFor,
+    rememberDatasetFormat,
+  } from "$lib/stores/app.svelte";
   import { onMount } from "svelte";
   import CoverageHeatmap from "$lib/queue/CoverageHeatmap.svelte";
   import { renderMarkdown } from "$lib/util/md";
@@ -32,6 +36,15 @@
   let sampleError = $state("");
 
   const dataset = $derived(app.detailDataset!);
+
+  /** Output format remembered per dataset. The control existed but was
+   *  bound to nothing and saved nowhere, so changing it did exactly
+   *  what leaving it alone did. */
+  const datasetFormat = $derived(datasetFormatFor(dataset.id));
+
+  function setDatasetFormat(format: string) {
+    rememberDatasetFormat(dataset.id, format);
+  }
 
   /** Which symbol the calendar heatmap describes. It was pinned to
    *  "QQQ", so the Coverage tab reported QQQ's gaps whatever dataset or
@@ -260,12 +273,19 @@
     {:else if activeTab === "settings"}
       <div class="settings-tab">
         <p class="text-body-sm fg-muted" style="margin-bottom: var(--sp-5);">
-          Per-dataset defaults. Applies when using the quick "Add to Queue" button.
+          Remembered for this dataset and used whenever you queue it,
+          including the quick "Add to Queue" button.
         </p>
         <div class="settings-group">
           <div class="settings-row">
             <label class="settings-label" for="ds-format">Default format</label>
-            <select id="ds-format" class="field-input" style="width: 200px;">
+            <select
+              id="ds-format"
+              class="field-input"
+              style="width: 200px;"
+              value={datasetFormat}
+              onchange={(e) => setDatasetFormat(e.currentTarget.value)}
+            >
               <option value="parquet">parquet (zstd compressed)</option>
               <option value="csv">csv</option>
               <option value="jsonl">jsonl (newline-delimited)</option>

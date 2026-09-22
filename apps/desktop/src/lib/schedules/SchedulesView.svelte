@@ -178,7 +178,7 @@
         </select>
       </label>
       <label class="field">
-        <span class="text-caption">Fire at (HH:MM ET)</span>
+        <span class="text-caption">Fire at (HH:MM, your timezone)</span>
         <input class="field-input tabnum" bind:value={composer.at_time} placeholder="17:30" />
       </label>
       <button class="btn btn-primary" onclick={create} disabled={creating}>

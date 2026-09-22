@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::format::OutputFormat;
-use crate::spec::DataKind;
+use crate::spec::{DataKind, DataSpec};
 
 #[derive(Debug, Serialize, Clone)]
 pub struct Coverage {
@@ -19,15 +19,15 @@ pub struct Coverage {
     pub format: OutputFormat,
 }
 
-/// Path layout: `<root>/<kind>/<symbol>_<kind>_<YYYYMMDD>.<ext>`.
-pub fn dataset_path(root: &Path, kind: &DataKind, symbol: &str, ymd: &str, ext: &str) -> PathBuf {
-    root.join(kind.as_str()).join(format!(
-        "{}_{}_{}.{}",
-        symbol.to_lowercase(),
-        kind.as_str(),
-        ymd,
-        ext
-    ))
+/// Where one work unit's file lives:
+/// `<root>/<dataset>/<symbol>_<dataset>[_<qualifier>]_<YYYYMMDD>.<ext>`.
+///
+/// The date stays last so [`scan`] can read it off the end whatever the
+/// qualifier contains, and the qualifier is empty for a whole-chain
+/// pull so existing libraries keep their filenames.
+pub fn dataset_path(root: &Path, spec: &DataSpec, ext: &str) -> PathBuf {
+    root.join(spec.kind.as_str())
+        .join(format!("{}.{}", spec.file_stem(), ext))
 }
 
 /// What the scan accumulates per (dataset, symbol) before it becomes a

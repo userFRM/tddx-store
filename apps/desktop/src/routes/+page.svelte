@@ -60,6 +60,7 @@
     stopProgressListener,
     loadSettings,
     loadCatalogue,
+    loadDatasetFormats,
     cycleTheme,
     type View,
   } from "$lib/stores/app.svelte";
@@ -74,6 +75,7 @@
     await loadSettings();
     void loadSavedSearches();
     void loadCatalogue();
+    void loadDatasetFormats();
     // Subscribe to backend progress events so the UI is push-updated
     // (Tier 2 "real" progress); SQLite polling stays as the safety net.
     startProgressListener();

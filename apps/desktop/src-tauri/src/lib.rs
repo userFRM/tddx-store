@@ -123,12 +123,17 @@ pub fn run() {
             std::fs::create_dir_all(&data_dir)?;
             secrets::set_data_dir(data_dir.clone());
 
-            // Seed Settings defaults from the Tauri-resolved path so the
-            // first `settings_get` returns sensible cross-platform paths
-            // instead of empty strings.
+            // Restore what the user last saved, then seed any field they
+            // never set from the Tauri-resolved path, so the first
+            // `settings_get` returns real cross-platform paths rather
+            // than empty strings.
             let app_state = app.state::<Arc<AppState>>();
+            let persisted = settings::load_persisted();
             tauri::async_runtime::block_on(async {
                 let mut s = app_state.settings.write().await;
+                if let Some(saved) = persisted {
+                    *s = saved;
+                }
                 if s.db_path.is_empty() {
                     s.db_path = data_dir.join("queue.db").to_string_lossy().into();
                 }

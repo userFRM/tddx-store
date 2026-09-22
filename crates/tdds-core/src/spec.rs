@@ -135,12 +135,50 @@ impl DataSpec {
         self.date.format("%Y%m%d").to_string()
     }
 
-    /// Stable file stem used everywhere on disk.
+    /// The part of a filename that distinguishes this pull from another
+    /// of the same dataset, symbol and date.
+    ///
+    /// Empty for a whole-chain default, so those files keep the name
+    /// they have always had and an existing library still scans. A
+    /// narrowed pull earns a suffix: without one, requesting one
+    /// expiration and then another writes to the same path, and the
+    /// second task sees a file already there and reports done having
+    /// fetched nothing.
+    pub fn file_qualifier(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if self.expiration != "*" && !self.expiration.is_empty() {
+            parts.push(format!("e{}", sanitize(&self.expiration)));
+        }
+        if self.strike != "*" && !self.strike.is_empty() {
+            parts.push(format!("k{}", sanitize(&self.strike)));
+        }
+        let right = self.right.to_lowercase();
+        if right != "both" && right != "*" && !right.is_empty() {
+            parts.push(sanitize(&right));
+        }
+        if let Some(interval) = self.interval.as_deref() {
+            let normalized = normalize_interval(interval);
+            if normalized != "tick" && !normalized.is_empty() {
+                parts.push(sanitize(&normalized));
+            }
+        }
+        parts.join("_")
+    }
+
+    /// Stable file stem used everywhere on disk. The date stays last so
+    /// `coverage::scan` can keep reading it off the end.
     pub fn file_stem(&self) -> String {
+        let qualifier = self.file_qualifier();
+        let middle = if qualifier.is_empty() {
+            String::new()
+        } else {
+            format!("{qualifier}_")
+        };
         format!(
-            "{}_{}_{}",
+            "{}_{}_{}{}",
             self.symbol.to_lowercase(),
             self.kind.as_str(),
+            middle,
             self.ymd()
         )
     }
@@ -253,6 +291,15 @@ pub const INTERVALS: &[IntervalOption] = &[
     },
 ];
 
+/// Strip anything that would be awkward in a filename on any platform.
+fn sanitize(raw: &str) -> String {
+    raw.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_lowercase()
+}
+
 /// Map legacy interval spellings onto the wire values ThetaData
 /// accepts. The v2 API took a millisecond integer where `0` meant
 /// "every update"; v3 names that `tick` and rejects everything outside
@@ -318,6 +365,76 @@ mod tests {
                 "legacy interval `{legacy}` normalized to `{normalized}`, which the SDK rejects",
             );
         }
+    }
+
+    /// Two pulls that differ only by contract filter must not write to
+    /// the same file. Before this, the second one found the first one's
+    /// file already there and reported done without fetching anything.
+    #[test]
+    fn narrowed_pulls_get_distinct_filenames() {
+        let base = DataSpec {
+            kind: DataKind::parse("option_history_quote").expect("known dataset"),
+            symbol: "SPXW".into(),
+            date: NaiveDate::from_ymd_opt(2026, 9, 21).unwrap(),
+            interval: None,
+            expiration: "*".into(),
+            strike: "*".into(),
+            right: "both".into(),
+            transforms: crate::Transforms::default(),
+        };
+
+        // The whole-chain default keeps the historical name, so an
+        // existing library still resolves.
+        assert_eq!(base.file_qualifier(), "");
+        assert_eq!(base.file_stem(), "spxw_option_history_quote_20260921");
+
+        let mut a = base.clone();
+        a.expiration = "20261016".into();
+        let mut b = base.clone();
+        b.expiration = "20261120".into();
+        assert_ne!(a.file_stem(), b.file_stem());
+
+        let mut calls = base.clone();
+        calls.right = "call".into();
+        let mut puts = base.clone();
+        puts.right = "put".into();
+        assert_ne!(calls.file_stem(), puts.file_stem());
+
+        let mut tick = base.clone();
+        tick.interval = Some("tick".into());
+        let mut minute = base.clone();
+        minute.interval = Some("1m".into());
+        // `tick` is the unsampled default and adds nothing to the name.
+        assert_eq!(tick.file_stem(), base.file_stem());
+        assert_ne!(minute.file_stem(), base.file_stem());
+    }
+
+    /// The date has to stay the last underscore-separated segment,
+    /// because `coverage::scan` reads it off the end.
+    #[test]
+    fn the_date_stays_last_whatever_the_qualifier() {
+        let mut spec = DataSpec {
+            kind: DataKind::parse("option_history_quote").expect("known dataset"),
+            symbol: "SPXW".into(),
+            date: NaiveDate::from_ymd_opt(2026, 9, 21).unwrap(),
+            interval: Some("5m".into()),
+            expiration: "20261016".into(),
+            strike: "5400.5".into(),
+            right: "call".into(),
+            transforms: crate::Transforms::default(),
+        };
+        let stem = spec.file_stem();
+        assert!(stem.ends_with("_20260921"), "date must be last: {stem}");
+        assert!(stem.starts_with("spxw_"), "symbol must be first: {stem}");
+        // Nothing in a filename that a filesystem would object to.
+        assert!(
+            stem.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
+            "unsafe filename: {stem}"
+        );
+
+        spec.strike = "*".into();
+        assert!(!spec.file_stem().contains("k-"));
     }
 
     /// A value already in wire form survives normalization untouched.

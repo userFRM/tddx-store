@@ -281,13 +281,7 @@ impl Outcome {
 
 async fn run_one(client: &Client, task: &Task) -> crate::Result<Outcome> {
     let out_dir = Path::new(&task.output_dir);
-    let path = dataset_path(
-        out_dir,
-        &task.spec.kind,
-        &task.spec.symbol,
-        &task.spec.ymd(),
-        task.format.extension(),
-    );
+    let path = dataset_path(out_dir, &task.spec, task.format.extension());
     if path.exists() {
         let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         return Ok(Outcome::AlreadyOnDisk { bytes });

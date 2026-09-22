@@ -92,9 +92,7 @@ impl From<Task> for TaskView {
     fn from(t: Task) -> Self {
         let path = tdds_core::coverage::dataset_path(
             std::path::Path::new(&t.output_dir),
-            &t.spec.kind,
-            &t.spec.symbol,
-            &t.spec.ymd(),
+            &t.spec,
             t.format.extension(),
         );
         Self {
