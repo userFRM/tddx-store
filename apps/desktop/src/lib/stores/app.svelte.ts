@@ -564,6 +564,40 @@ export function browseTo(kind: string, symbol = "") {
   navigate("browse");
 }
 
+/** Present one live catalogue entry in the shape the composer and the
+ *  dataset cards take.
+ *
+ *  `DATASETS` below is a seven-entry mirror written before the
+ *  catalogue was registry-driven; it still backs the home page's
+ *  curated picks, but anything that needs to address *any* dataset has
+ *  to go through the catalogue or it silently covers a ninth of the
+ *  product. */
+export function datasetFromCatalogue(entry: CatalogueEntry): DatasetMeta {
+  const assetClass: AssetClass = entry.name.startsWith("option_")
+    ? "option"
+    : entry.name.startsWith("index_")
+      ? "index"
+      : entry.name.startsWith("rate_") || entry.name.startsWith("interest_")
+        ? "rate"
+        : "stock";
+  return {
+    id: entry.name,
+    title: entry.summary || entry.name,
+    subtitle: entry.description || "",
+    assetClass,
+    cadence: (entry.subcategory || "history") as Cadence,
+    specLine: entry.rest_path,
+    featured: false,
+    tags: [entry.category, entry.subcategory].filter(Boolean),
+  };
+}
+
+/** The catalogue entry for `name`, as a `DatasetMeta`. */
+export function datasetById(name: string): DatasetMeta | null {
+  const entry = app.catalogue.find((e) => e.name === name);
+  return entry ? datasetFromCatalogue(entry) : null;
+}
+
 export function openDetail(d: DatasetMeta) {
   app.detailDataset = d;
   app.currentView = "detail";

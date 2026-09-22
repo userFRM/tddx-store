@@ -17,7 +17,8 @@
   } from "lucide-svelte";
   import { ArrowUpRight, Lock } from "lucide-svelte";
   import { api, type EnqueueArgs, type Transforms } from "$lib/api";
-  import { composer, closeComposer, app, tierForKind, refreshQueueSnapshot } from "$lib/stores/app.svelte";
+  import { composer, closeComposer, app, tierForKind, refreshQueueSnapshot, log } from "$lib/stores/app.svelte";
+  import IntervalPicker from "$lib/catalogue/IntervalPicker.svelte";
   import SymbolPicker from "$lib/composer/SymbolPicker.svelte";
   import DateRangeSlider from "$lib/composer/DateRangeSlider.svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
@@ -65,19 +66,26 @@
       // "QUOTE" kind for both endpoints.
       const isOption = ds.assetClass === "option";
       const endpoint = isOption ? "option_list_dates" : "stock_list_dates";
-      // request_type: TRADE for any *_trade* kind, QUOTE otherwise. The
-      // server uses this only as a presence-filter (does this date have
-      // any rows of that kind?) — we want the broader set, so prefer
-      // TRADE which is denser than QUOTE on most tiers.
-      const request_type = ds.cadence === "quote" ? "QUOTE" : "TRADE";
+      // request_type is a presence filter — does this date have any
+      // rows of that kind? We want the broader set, so prefer trade,
+      // which is denser than quote on most tiers, and only ask about
+      // quotes for a dataset that carries nothing else.
+      const request_type =
+        /_quote$/.test(ds.id) && !/trade/.test(ds.id) ? "quote" : "trade";
       const args: Record<string, string> = {
         request_type,
         symbol: composer.symbol.trim().toUpperCase(),
       };
+      // `option_list_dates` declares expiration as required; without it
+      // the dispatcher rejects the call before it reaches the wire, and
+      // the empty catch below turned that into a silently empty date
+      // list for every option dataset. `*` is the documented wildcard.
+      if (isOption) args.expiration = "*";
       const list = await api.listQuery({ endpoint, args });
       availableDates = list;
-    } catch {
+    } catch (e: unknown) {
       availableDates = [];
+      log("warn", `Could not list available dates: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       datesLoading = false;
     }
@@ -270,24 +278,20 @@
               <option value="json">JSON array</option>
             </select>
           </label>
-          {#if ds?.cadence === "quote"}
-            <label class="field-stack">
-              <span class="text-caption">Quote interval</span>
-              <select class="field-input" bind:value={composer.interval}>
-                <option value="0">0 — tick-by-tick</option>
-                <option value="1s">1s — sampled</option>
-                <option value="60s">60s — 1m sampled</option>
-              </select>
-            </label>
-          {:else}
-            <label class="field-stack">
-              <span class="text-caption">Priority</span>
-              <select class="field-input" disabled>
-                <option>Normal</option>
-              </select>
-            </label>
-          {/if}
         </div>
+
+        <!-- Granularity, when the endpoint declares one. This used to
+             key off `cadence === "quote"` — never true for a catalogue
+             dataset, so the control was invisible for every endpoint
+             that takes an interval — and offered the pre-v3 spellings
+             `0` / `60s` against a fixed list the server publishes. The
+             Browse step picker already reads the real options off the
+             catalogue, so use it rather than keeping a second list. The
+             branch it replaces showed a permanently disabled "Priority"
+             select, which was never a control at all. -->
+        {#if ds}
+          <IntervalPicker kindId={ds.id} bind:interval={composer.interval} />
+        {/if}
 
         {#if ds?.assetClass === "option"}
           <div class="row-3">
