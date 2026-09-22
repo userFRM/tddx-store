@@ -5,7 +5,8 @@
    * flatfile_download Tauri command. Files come back as a CSV / JSONL
    * payload at the given output path (one trading day per request).
    */
-  import { X, Loader2, FileArchive, Play } from "lucide-svelte";
+  import { X, Loader2, FileArchive, Play, FolderOpen} from "lucide-svelte";
+  import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { app, log } from "$lib/stores/app.svelte";
   import { api, type FlatfileReqType, type FlatfileSecType } from "$lib/api";
 
@@ -44,6 +45,18 @@
     outputPath = `${app.settings.output_dir}/_flatfiles/${ff.sec.toLowerCase()}_${ff.req}_${date}.${format.toLowerCase()}`;
   });
 
+  // A flat-file archive lands outside the per-symbol library tree, so
+  // the path in the status line is the only way to find it. Give the
+  // user a way to act on it rather than a string to retype.
+  let writtenPath = $state("");
+  async function reveal() {
+    try {
+      await revealItemInDir(writtenPath);
+    } catch (e: unknown) {
+      msg = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   async function run() {
     if (!ff) return;
     if (!date) { msg = "Date required (YYYYMMDD)."; return; }
@@ -59,9 +72,11 @@
       });
       busy = false;
       msg = `Wrote ${path}`;
+      writtenPath = path;
       log("info", `Flatfile downloaded`, { sec: ff.sec, req: ff.req, date, path });
     } catch (e: unknown) {
       busy = false;
+      writtenPath = "";
       const m = e instanceof Error ? e.message : String(e);
       msg = m;
       log("error", `Flatfile failed: ${m}`);
@@ -108,6 +123,11 @@
         <span class="msg" class:error={msg.toLowerCase().includes("required") || msg.toLowerCase().includes("failed")}>
           {msg}
         </span>
+        {#if writtenPath}
+          <button class="btn btn-ghost" onclick={reveal}>
+            <FolderOpen size={14} />Show file
+          </button>
+        {/if}
         <button class="btn btn-primary" onclick={run} disabled={busy || !date}>
           {#if busy}<Loader2 class="spin" size={14} />Downloading…
           {:else}<Play size={14} fill="currentColor" />Download

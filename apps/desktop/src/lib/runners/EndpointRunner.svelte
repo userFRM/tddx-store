@@ -5,7 +5,8 @@
    * write result to a chosen file. Powers the "Run" button on every
    * EndpointCard.
    */
-  import { X, Play, Loader2, Check, ChevronRight } from "lucide-svelte";
+  import { X, Play, Loader2, Check, ChevronRight, FolderOpen} from "lucide-svelte";
+  import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { api } from "$lib/api";
   import { app, log } from "$lib/stores/app.svelte";
 
@@ -23,6 +24,19 @@
     const stem = `${r.endpoint.name}__${Date.now()}`;
     const ext = r.format;
     return `${app.settings.output_dir}/_oneshot/${stem}.${ext}`;
+  }
+
+  // One-shot results land in `_oneshot/`, away from the library tree,
+  // so the only way to reach one is the path in the status line.
+  let writtenPath = $state("");
+  async function reveal() {
+    try {
+      await revealItemInDir(writtenPath);
+    } catch (e: unknown) {
+      if (app.endpointRunner) {
+        app.endpointRunner.msg = e instanceof Error ? e.message : String(e);
+      }
+    }
   }
 
   async function run() {
@@ -48,9 +62,11 @@
       app.endpointRunner.busy = false;
       app.endpointRunner.msg =
         rows === 0 ? "No data" : `Wrote ${rows.toLocaleString()} row${rows === 1 ? "" : "s"} → ${path}`;
+      writtenPath = rows === 0 ? "" : path;
       log("info", `Ran ${ep.name}`, { rows, path });
     } catch (e: unknown) {
       app.endpointRunner.busy = false;
+      writtenPath = "";
       const msg = e instanceof Error ? e.message : String(e);
       app.endpointRunner.msg = msg;
       log("error", `${ep.name} failed: ${msg}`);
@@ -130,6 +146,11 @@
           {r.msg}
         </span>
         <div class="actions">
+          {#if writtenPath}
+            <button class="btn btn-ghost" onclick={reveal}>
+              <FolderOpen size={14} />Show file
+            </button>
+          {/if}
           <button class="btn btn-ghost" onclick={close}>Close</button>
           <button class="btn btn-primary" onclick={run} disabled={r.busy}>
             {#if r.busy}

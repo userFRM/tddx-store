@@ -252,6 +252,7 @@ export const app = $state<AppState>({
 // `app.path().app_data_dir()` server-side, so the theme survives a
 // reinstall under the same bundle identifier on every platform.
 import { kvGet, kvRemove, kvSet } from "$lib/persistence/kv";
+import { notify } from "$lib/persistence/notifications";
 
 const THEME_KEY = "tdds.theme";
 
@@ -635,23 +636,66 @@ function _pollDelay(): number {
 }
 
 function _queueBusy(): boolean {
-  const counts = app.queueSnap?.counts ?? [];
-  return counts.some(([status, n]) => n > 0 && (status === "running" || status === "pending"));
+  return _busy(app.queueSnap);
 }
+
+function _busy(snap: QueueSnapshot | null): boolean {
+  return (snap?.counts ?? []).some(
+    ([status, n]) => n > 0 && (status === "running" || status === "pending"),
+  );
+}
+
+/** Counts at the moment the queue last went from idle to busy, so the
+ *  completion notice can report the run rather than the lifetime
+ *  totals of the database. */
+let _runBaseline: Record<string, number> | null = null;
 
 async function _pollOnce() {
   try {
     const snap = await api.snapshot();
     const finishedBefore = _finishedCount(app.queueSnap);
+    const wasBusy = _busy(app.queueSnap);
     app.queueSnap = snap;
     // A task that just finished changed what is on disk. Coverage was
     // fetched once per view on mount, so until this the Library and the
     // Home dashboard kept showing pre-download numbers until the user
     // navigated away and back.
     if (_finishedCount(snap) > finishedBefore) void loadCoverage(true);
+
+    const isBusy = _busy(snap);
+    if (isBusy && !wasBusy) {
+      _runBaseline = _countMap(snap);
+    } else if (!isBusy && wasBusy) {
+      _announceRun(snap);
+      _runBaseline = null;
+    }
   } catch {
     // pre-connect; silently drop
   }
+}
+
+function _countMap(snap: QueueSnapshot): Record<string, number> {
+  return Object.fromEntries(snap.counts);
+}
+
+/** Tell the user a run is over. A download queue is something you start
+ *  and walk away from, so the one moment worth interrupting for is the
+ *  moment it stops. */
+function _announceRun(snap: QueueSnapshot) {
+  const end = _countMap(snap);
+  const start = _runBaseline ?? {};
+  const delta = (k: string) => Math.max(0, (end[k] ?? 0) - (start[k] ?? 0));
+  const done = delta("done");
+  const failed = delta("failed");
+  const empty = delta("empty");
+  if (done + failed + empty === 0) return;
+
+  const parts = [`${done} downloaded`];
+  if (empty > 0) parts.push(`${empty} with no data`);
+  if (failed > 0) parts.push(`${failed} failed`);
+  const body = parts.join(", ");
+  log(failed > 0 ? "warn" : "info", `Queue finished — ${body}`);
+  void notify("Downloads finished", body);
 }
 
 function _finishedCount(snap: QueueSnapshot | null): number {
