@@ -340,8 +340,6 @@
 
   .brand-logo {
     display: block;
-    /* The wordmark's second half inherits this colour. */
-    color: var(--fg-muted);
     -webkit-user-select: none;
     user-select: none;
   }

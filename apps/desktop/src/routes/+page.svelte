@@ -299,8 +299,6 @@
   }
   .brand-logo {
     display: block;
-    /* The wordmark's second half inherits this colour. */
-    color: var(--fg-muted);
     -webkit-user-select: none;
     user-select: none;
   }
@@ -447,7 +445,21 @@
   }
   .rail-item.active {
     background: var(--accent-tint);
-    color: var(--accent-hi);
+    color: var(--accent);
+    position: relative;
+  }
+  /* The one place the logo's own gradient appears in the chrome: a
+     3px identity rule on the active item. It carries no text, which is
+     the condition for using it — white on the cyan end is 1.8:1. */
+  .rail-item.active::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 6px;
+    bottom: 6px;
+    width: 3px;
+    border-radius: var(--r-pill);
+    background: var(--brand-gradient);
   }
   .rail-label {
     flex: 1;
@@ -456,7 +468,7 @@
   .rail-badge {
     margin-left: auto;
     font-size: var(--text-caption);
-    background: var(--accent);
+    background: var(--accent-fill-solid);
     color: var(--on-accent);
     padding: 1px 6px;
     border-radius: var(--r-pill);

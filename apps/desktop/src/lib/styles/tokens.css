@@ -42,6 +42,22 @@
   --accent-lo:      #004387;
   --accent-tint:    rgba(16, 116, 255, 0.10);
 
+  /* A filled surface and the ink that sits on it are a different job
+     from a link. One token cannot serve both: a blue light enough to
+     read as text on the canvas is too light to carry white text, and
+     vice versa. These are the fill side. */
+  --accent-fill:      linear-gradient(180deg, #1074FF 0%, #0057BE 100%);
+  --accent-fill-hi:   linear-gradient(180deg, #0B69E6 0%, #004AA3 100%);
+  --accent-fill-solid: #0063CC;
+
+  /* The logo's own gradient. Identity only — active indicators, progress
+     fills, decorative rules. Never behind text: at the cyan end, white
+     falls to 1.8:1. */
+  --brand-gradient: linear-gradient(90deg, #1074FF 0%, #00D4FF 100%);
+
+  /* The wordmark's second half. Matches the brand asset exactly. */
+  --wordmark-ink:   #525252;
+
   --good:           #1F7A4D;
   --warn:           #8A6100;
   --bad:            #C0392B;
@@ -96,9 +112,9 @@
   --tier-standard-fg:     #0063CC;
   --tier-standard-border: rgba(16, 116, 255, 0.28);
   /* Pro is the only filled chip. That is the whole signal. */
-  --tier-pro-bg:          var(--accent);
+  --tier-pro-bg:          var(--accent-fill-solid);
   --tier-pro-fg:          var(--on-accent);
-  --tier-pro-border:      var(--accent);
+  --tier-pro-border:      var(--accent-fill-solid);
 
   /* ── Typography ─────────────────────────────────────────── */
   --font-ui:        "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -208,10 +224,24 @@
   --fg-muted:       #A6AEBF;
   --fg-subtle:      #6C7488;
 
-  --accent:         #4D9BFF;
-  --accent-hi:      #7AB5FF;
+  /* #4D9BFF was here and read washed out, because it was picked to
+     clear 4.5:1 as text AND used as a button fill, where white on it
+     manages only 2.8:1. Splitting the jobs lets the text colour stay
+     saturated: #2E86FF is 5.4:1 on the canvas. */
+  --accent:         #2E86FF;
+  --accent-hi:      #5BA3FF;
   --accent-lo:      #1074FF;
-  --accent-tint:    rgba(77, 155, 255, 0.14);
+  --accent-tint:    rgba(46, 134, 255, 0.14);
+
+  /* Fills go darker so white sits at 5.9:1 on them. */
+  --accent-fill:      linear-gradient(180deg, #1367DE 0%, #0B4FAE 100%);
+  --accent-fill-hi:   linear-gradient(180deg, #1A74F0 0%, #0F5AC4 100%);
+  --accent-fill-solid: #0B5FD0;
+
+  --brand-gradient: linear-gradient(90deg, #1074FF 0%, #00D4FF 100%);
+
+  /* The dark variant of the brand asset uses #a0a0a0 for "data". */
+  --wordmark-ink:   #A0A0A0;
 
   --good:           #4ECB8C;
   --warn:           #D9A441;
@@ -220,9 +250,9 @@
   --data-bear:      #F87171;
 
   --accent-tint:        rgba(77, 155, 255, 0.14);
-  --accent-tint-weak:   rgba(77, 155, 255, 0.05);
-  --accent-tint-strong: rgba(77, 155, 255, 0.22);
-  --accent-ring:        rgba(77, 155, 255, 0.36);
+  --accent-tint-weak:   rgba(46, 134, 255, 0.05);
+  --accent-tint-strong: rgba(46, 134, 255, 0.22);
+  --accent-ring:        rgba(46, 134, 255, 0.36);
 
   --neutral-tint:   rgba(232, 234, 240, 0.09);
 
@@ -242,20 +272,20 @@
   --tier-free-bg:         var(--neutral-tint);
   --tier-free-fg:         var(--fg-muted);
   --tier-free-border:     transparent;
-  --tier-value-bg:        rgba(77, 155, 255, 0.07);
+  --tier-value-bg:        rgba(46, 134, 255, 0.07);
   --tier-value-fg:        #8FA6C4;
-  --tier-value-border:    rgba(77, 155, 255, 0.16);
-  --tier-standard-bg:     rgba(77, 155, 255, 0.16);
-  --tier-standard-fg:     #7AB5FF;
-  --tier-standard-border: rgba(77, 155, 255, 0.30);
-  --tier-pro-bg:          var(--accent);
-  --tier-pro-fg:          #0B1220;
-  --tier-pro-border:      var(--accent);
+  --tier-value-border:    rgba(46, 134, 255, 0.16);
+  --tier-standard-bg:     rgba(46, 134, 255, 0.16);
+  --tier-standard-fg:     #5BA3FF;
+  --tier-standard-border: rgba(46, 134, 255, 0.30);
+  --tier-pro-bg:          var(--accent-fill-solid);
+  --tier-pro-fg:          #FFFFFF;
+  --tier-pro-border:      var(--accent-fill-solid);
 
   --shadow-flat:         0 0 0 1px rgba(0, 0, 0, 0.25);
   --shadow-raised:       0 1px 2px rgba(0, 0, 0, 0.45),
                          0 0 0 1px rgba(0, 0, 0, 0.3);
   --shadow-modal:        0 24px 64px rgba(0, 0, 0, 0.6),
                          0 0 0 1px rgba(0, 0, 0, 0.45);
-  --shadow-glow-accent:  0 0 0 3px rgba(77, 155, 255, 0.3);
+  --shadow-glow-accent:  0 0 0 3px rgba(46, 134, 255, 0.34);
 }

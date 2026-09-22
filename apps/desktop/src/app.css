@@ -123,12 +123,16 @@ button { font-family: inherit; cursor: pointer; }
 }
 
 .btn-primary {
-  background: var(--accent);
+  /* A fill, not a link colour — see `--accent-fill` in tokens.css for
+     why those are separate. The gradient is a shallow vertical ramp of
+     one blue; it gives the control depth without introducing a hue. */
+  background: var(--accent-fill);
   color: var(--on-accent);
   font-weight: var(--weight-semi);
+  border-color: transparent;
 }
-.btn-primary:hover  { background: var(--accent-hi); }
-.btn-primary:active { background: var(--accent-lo); }
+.btn-primary:hover  { background: var(--accent-fill-hi); }
+.btn-primary:active { background: var(--accent-fill-hi); filter: brightness(0.94); }
 
 .btn-secondary {
   background: var(--surface-2);
@@ -282,7 +286,7 @@ input::placeholder { color: var(--fg-subtle); }
   transition: width var(--dur-base) var(--ease-standard);
 }
 .progress-fill.running {
-  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-hi) 100%);
+  background: var(--brand-gradient);
 }
 
 /* Indeterminate "in flight" stripe — animates a ~40% wide highlight
