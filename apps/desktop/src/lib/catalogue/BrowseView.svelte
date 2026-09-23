@@ -29,13 +29,16 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
 
   // ── Step state ────────────────────────────────────────────────
-  let assetClass = $state<AssetClass>("stock");
+  // Start where the user usually ends up. Preferences only pre-fill;
+  // every step still takes any choice.
+  const prefs = app.settings.preferences;
+  let assetClass = $state<AssetClass>((prefs?.default_asset_class ?? "stock") as AssetClass);
   let symbols    = $state<string[]>([]);
-  let kindId     = $state("");
+  let kindId     = $state(prefs?.default_dataset ?? "");
   let start      = $state("");
   let end        = $state("");
   let interval   = $state("tick");
-  let format     = $state<"parquet" | "csv" | "jsonl" | "json">("parquet");
+  let format     = $state<"parquet" | "csv" | "jsonl" | "json">(prefs?.default_format ?? "parquet");
 
   // Shared param values map — written to by SmartFilters and ParamForm
   let paramValues = $state<Record<string, string>>({});

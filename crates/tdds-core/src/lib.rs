@@ -44,7 +44,7 @@ pub use tier::{
     UserTiers, UPGRADE_URL,
 };
 pub use transform::Transforms;
-pub use worker::Pool;
+pub use worker::{Pool, PoolOptions};
 pub use yaml_meta::{catalogue as endpoint_catalogue, EndpointMeta};
 
 #[derive(Debug, thiserror::Error)]

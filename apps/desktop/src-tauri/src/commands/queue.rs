@@ -10,8 +10,8 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, State};
 use tdds_core::{
-    coverage, format::OutputFormat, queue::TaskStatus, DataKind, DataSpec, Pool, ProgressEvent,
-    Queue,
+    coverage, format::OutputFormat, queue::TaskStatus, DataKind, DataSpec, Pool, PoolOptions,
+    ProgressEvent, Queue,
 };
 
 use crate::state::{parse_ymd, AppState, DiskUsage, QueueSnapshot, TaskView};
@@ -302,8 +302,15 @@ pub async fn run_queue(
             }
         }
     });
+    let prefs = state.settings.read().await.preferences.clone();
+    let options = PoolOptions {
+        max_concurrency: prefs.max_concurrency,
+        split_failed_windows: prefs.split_failed_windows,
+    };
     let h = tokio::spawn(async move {
-        let pool = Pool::new(client, queue, tiers).with_events(tx);
+        let pool = Pool::new(client, queue, tiers)
+            .with_options(options)
+            .with_events(tx);
         // A pool error means the queue itself is unreachable; individual
         // task failures are recorded on their rows and never surface
         // here. Log it rather than dropping it on the floor.

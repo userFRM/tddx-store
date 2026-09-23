@@ -21,10 +21,34 @@ use crate::progress::{Progress, ProgressEvent};
 use crate::queue::{Queue, Task};
 use crate::tier::UserTiers;
 
+/// Behaviour the user can choose, as opposed to limits the account
+/// imposes.
+#[derive(Debug, Clone, Copy)]
+pub struct PoolOptions {
+    /// Run fewer workers than the plan allows. The in-flight budget is
+    /// account-wide, so someone running their own scripts against the
+    /// same account needs to leave headroom for them. `None` uses the
+    /// whole budget.
+    pub max_concurrency: Option<usize>,
+    /// Re-queue a failed windowed task as two halves rather than
+    /// leaving it as one failed row.
+    pub split_failed_windows: bool,
+}
+
+impl Default for PoolOptions {
+    fn default() -> Self {
+        Self {
+            max_concurrency: None,
+            split_failed_windows: true,
+        }
+    }
+}
+
 pub struct Pool {
     client: Client,
     queue: Queue,
     tiers: UserTiers,
+    options: PoolOptions,
     progress: Arc<Mutex<Progress>>,
     events_tx: Option<mpsc::Sender<ProgressEvent>>,
 }
@@ -39,9 +63,22 @@ impl Pool {
             client,
             queue,
             tiers,
+            options: PoolOptions::default(),
             progress: Arc::new(Mutex::new(Progress::new())),
             events_tx: None,
         }
+    }
+
+    pub fn with_options(mut self, options: PoolOptions) -> Self {
+        self.options = options;
+        self
+    }
+
+    /// How many workers this run will use: the plan's account-wide
+    /// budget, lowered to the user's cap when they set one, and never
+    /// fewer than one.
+    pub fn worker_count(&self) -> usize {
+        effective_workers(self.tiers.in_flight_budget(), self.options.max_concurrency)
     }
 
     pub fn with_events(mut self, tx: mpsc::Sender<ProgressEvent>) -> Self {
@@ -56,12 +93,13 @@ impl Pool {
     /// Drain the queue. Returns once every worker has seen it empty.
     pub async fn run(&self) -> crate::Result<()> {
         let mut handles = Vec::new();
-        for _ in 0..self.tiers.in_flight_budget() {
+        let split = self.options.split_failed_windows;
+        for _ in 0..self.worker_count() {
             let client = self.client.clone();
             let queue = self.queue.clone();
             let progress = self.progress.clone();
             let tx = self.events_tx.clone();
-            handles.push(tokio::spawn(run_worker(client, queue, progress, tx)));
+            handles.push(tokio::spawn(run_worker(client, queue, progress, tx, split)));
         }
         for h in handles {
             let _ = h.await;
@@ -75,6 +113,7 @@ async fn run_worker(
     queue: Queue,
     progress: Arc<Mutex<Progress>>,
     tx: Option<mpsc::Sender<ProgressEvent>>,
+    split_failed_windows: bool,
 ) {
     loop {
         let task = match queue.claim_next().await {
@@ -197,8 +236,10 @@ async fn run_worker(
                 // half is strictly smaller, so repeated failure
                 // converges on the days that actually fail rather than
                 // repeating the ones that do not.
-                if let Some(n) = split_failed_window(&queue, &task, &msg).await {
-                    msg = format!("{msg} (re-queued as {n} narrower windows)");
+                if split_failed_windows {
+                    if let Some(n) = split_failed_window(&queue, &task, &msg).await {
+                        msg = format!("{msg} (re-queued as {n} narrower windows)");
+                    }
                 }
                 match queue.mark_failed(&task.id, &msg).await {
                     Ok(true) => {
@@ -220,6 +261,40 @@ async fn run_worker(
                 }
             }
         }
+    }
+}
+
+/// The plan's budget, lowered to the user's cap, never below one. A cap
+/// above the budget is not a way to exceed the plan — the server would
+/// only throttle the extra workers — so it is clamped rather than
+/// honoured.
+fn effective_workers(budget: usize, cap: Option<usize>) -> usize {
+    cap.map_or(budget, |c| c.min(budget)).max(1)
+}
+
+#[cfg(test)]
+mod pool_tests {
+    use super::effective_workers;
+
+    #[test]
+    fn no_cap_uses_the_whole_budget() {
+        assert_eq!(effective_workers(8, None), 8);
+    }
+
+    #[test]
+    fn a_cap_below_the_budget_leaves_headroom() {
+        assert_eq!(effective_workers(8, Some(3)), 3);
+    }
+
+    #[test]
+    fn a_cap_above_the_budget_cannot_exceed_the_plan() {
+        assert_eq!(effective_workers(8, Some(64)), 8);
+    }
+
+    #[test]
+    fn there_is_always_at_least_one_worker() {
+        assert_eq!(effective_workers(8, Some(0)), 1);
+        assert_eq!(effective_workers(0, None), 1);
     }
 }
 

@@ -55,6 +55,58 @@ pub struct Settings {
     /// with the pair above.
     #[serde(default, skip_serializing)]
     pub api_key: String,
+    /// How the user works, so the app stops asking. Persisted with the
+    /// paths; `#[serde(default)]` so a settings file written before
+    /// this existed still loads.
+    #[serde(default)]
+    pub preferences: Preferences,
+}
+
+/// Defaults and behaviour the user chooses. Every field pre-fills or
+/// tunes something the user could otherwise set per download, so none
+/// of it ever blocks a choice.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Preferences {
+    /// `parquet` | `csv` | `jsonl` | `json`.
+    pub default_format: String,
+    /// `stock` | `option` | `index` | `rate`.
+    pub default_asset_class: String,
+    /// A registry endpoint name, or none to leave step 3 open.
+    pub default_dataset: Option<String>,
+    /// The range preset Browse starts on, in years.
+    pub default_range_years: u32,
+    /// Named symbol lists, offered as a symbol source in Browse.
+    pub watchlists: Vec<Watchlist>,
+    /// Run fewer downloads at once than the plan allows. The budget is
+    /// account-wide, so this is how to leave headroom for other tools
+    /// on the same account. `None` uses the whole budget.
+    pub max_concurrency: Option<usize>,
+    /// Show a system notification when a run finishes.
+    pub notify_on_complete: bool,
+    /// Re-queue a failed multi-day task as two halves.
+    pub split_failed_windows: bool,
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            default_format: "parquet".into(),
+            default_asset_class: "stock".into(),
+            default_dataset: None,
+            default_range_years: 3,
+            watchlists: Vec::new(),
+            max_concurrency: None,
+            notify_on_complete: true,
+            split_failed_windows: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Watchlist {
+    pub name: String,
+    pub symbols: Vec<String>,
 }
 
 /// Bytes and file count under the output directory.

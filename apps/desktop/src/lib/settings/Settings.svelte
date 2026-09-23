@@ -5,6 +5,7 @@
    * email is shown alongside a "Sign out" affordance.
    */
   import { onMount } from "svelte";
+  import PreferencesCard from "$lib/settings/PreferencesCard.svelte";
   import {
     Save,
     LogIn,
@@ -255,10 +256,12 @@
     </section>
   </div>
 
+  <PreferencesCard />
+
   <footer class="settings-footer">
     <span class="hint fg-muted">{saveMsg}</span>
     <button class="btn btn-secondary" onclick={saveStorage}>
-      <Save size={14} /> Save storage settings
+      <Save size={14} /> Save settings
     </button>
   </footer>
 </div>

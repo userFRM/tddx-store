@@ -1,14 +1,15 @@
 <script lang="ts">
   /**
    * Step 2 — Which symbols?
-   * Three modes: Single (autocomplete) · Index preset (dropdown) · Custom list (textarea).
+   * Four modes: Single (autocomplete) · Watchlist (saved in Settings) ·
+   * Index preset (dropdown) · Custom list (textarea).
    * Emits a flat string[] of uppercase ticker symbols to the parent.
    */
   import { onMount } from "svelte";
-  import { User, Layers, List, Loader2 } from "lucide-svelte";
+  import { User, Layers, List, Loader2, Star } from "lucide-svelte";
   import SymbolPicker from "$lib/composer/SymbolPicker.svelte";
   import { api, TAURI_AVAILABLE } from "$lib/api";
-  import { log } from "$lib/stores/app.svelte";
+  import { app, log, navigate } from "$lib/stores/app.svelte";
   import type { AssetClass } from "$lib/stores/app.svelte";
   import type { IndexPresetView } from "$lib/api";
 
@@ -20,7 +21,7 @@
     symbols: string[];
   } = $props();
 
-  type Mode = "single" | "preset" | "custom";
+  type Mode = "single" | "watchlist" | "preset" | "custom";
   let mode = $state<Mode>("single");
 
   // Single mode
@@ -40,6 +41,11 @@
   // Custom list mode
   let customRaw = $state("");
 
+  // Watchlist mode — named lists kept in Settings, so the same dozen
+  // tickers are one click rather than retyped every time.
+  const watchlists = $derived(app.settings.preferences?.watchlists ?? []);
+  let selectedWatchlist = $state(0);
+
   function parseCustom(raw: string): string[] {
     return raw
       .split(/[\s,;\n]+/)
@@ -52,6 +58,8 @@
     if (mode === "single") {
       const s = singleSymbol.trim().toUpperCase();
       symbols = s ? [s] : [];
+    } else if (mode === "watchlist") {
+      symbols = [...(watchlists[selectedWatchlist]?.symbols ?? [])];
     } else if (mode === "preset") {
       const cached = constituentsCache[selectedPresetId];
       symbols = cached ? [...cached] : [];
@@ -112,8 +120,9 @@
   });
 
   const MODES: { id: Mode; label: string; icon: typeof User; description: string }[] = [
-    { id: "single", label: "Single symbol",  icon: User,   description: "One ticker with autocomplete" },
-    { id: "preset", label: "Index preset",   icon: Layers, description: "S&P 500, Nasdaq-100, etc." },
+    { id: "single",    label: "Single symbol", icon: User,   description: "One ticker with autocomplete" },
+    { id: "watchlist", label: "Watchlist",     icon: Star,   description: "A list saved in Settings" },
+    { id: "preset",    label: "Index preset",  icon: Layers, description: "S&P 500, Nasdaq-100, etc." },
     { id: "custom", label: "Custom list",    icon: List,   description: "Paste any ticker list" },
   ];
 
@@ -153,6 +162,25 @@
         placeholder={assetClass === "option" ? "Option root, e.g. SPX" : "e.g. QQQ, SPY, AAPL"}
         autofocus={false}
       />
+
+    {:else if mode === "watchlist"}
+      {#if watchlists.length === 0}
+        <p class="empty-hint">
+          No watchlists yet.
+          <button type="button" class="link-btn" onclick={() => navigate("settings")}>
+            Create one in Settings
+          </button>
+          to reuse a set of tickers.
+        </p>
+      {:else}
+        <div class="preset-picker">
+          <select class="field-input" bind:value={selectedWatchlist}>
+            {#each watchlists as w, i (i)}
+              <option value={i}>{w.name} · {w.symbols.length} symbol{w.symbols.length === 1 ? "" : "s"}</option>
+            {/each}
+          </select>
+        </div>
+      {/if}
 
     {:else if mode === "preset"}
       {#if presetsLoading}
@@ -228,7 +256,7 @@
 
   .mode-row {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     gap: var(--sp-2);
   }
 
@@ -307,6 +335,15 @@
     border-radius: var(--r-sm);
   }
 
+  .link-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--accent);
+    cursor: pointer;
+    font: inherit;
+    text-decoration: underline;
+  }
   .preset-picker {
     display: flex;
     flex-direction: column;

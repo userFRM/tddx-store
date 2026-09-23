@@ -25,12 +25,39 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
   return tauriInvoke<T>(cmd, args);
 }
 
+export type Watchlist = { name: string; symbols: string[] };
+
+/** How the user works. Pre-fills and tunes; never blocks a choice. */
+export type Preferences = {
+  default_format: "parquet" | "csv" | "jsonl" | "json";
+  default_asset_class: "stock" | "option" | "index" | "rate";
+  default_dataset: string | null;
+  default_range_years: number;
+  watchlists: Watchlist[];
+  /** Fewer concurrent downloads than the plan allows; null = whole budget. */
+  max_concurrency: number | null;
+  notify_on_complete: boolean;
+  split_failed_windows: boolean;
+};
+
+export const DEFAULT_PREFERENCES: Preferences = {
+  default_format: "parquet",
+  default_asset_class: "stock",
+  default_dataset: null,
+  default_range_years: 3,
+  watchlists: [],
+  max_concurrency: null,
+  notify_on_complete: true,
+  split_failed_windows: true,
+};
+
 export type Settings = {
   db_path: string;
   output_dir: string;
   creds_path: string;
   email?: string;
   password?: string;
+  preferences: Preferences;
 };
 
 /** Tagged to match the Rust `LoginArgs` enum, so "an API key plus a

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { app } from "$lib/stores/app.svelte";
   /**
    * Step 4 — What time range?
    * Quick pills (1Y / 2Y / 3Y / 5Y / 10Y / Max) + Custom toggle for
@@ -93,12 +94,14 @@
     activePill = "";
   }
 
-  // Initialize default on mount
+  // Start on the range the user set in Preferences, or the nearest
+  // pill to it; three years when they have not chosen.
   $effect.pre(() => {
-    const defaultPill = PILLS.find((p) => p.id === "3y");
-    if (defaultPill && !start && !end) {
-      selectPill(defaultPill);
-    }
+    if (start || end) return;
+    const wanted = app.settings.preferences?.default_range_years ?? 3;
+    const defaultPill =
+      PILLS.find((p) => p.years === wanted) ?? PILLS.find((p) => p.id === "3y");
+    if (defaultPill) selectPill(defaultPill);
   });
 
   // Estimate

@@ -16,6 +16,7 @@ import {
   resolveKindToEndpoint,
   tierMeets,
   TIER_RANK,
+  DEFAULT_PREFERENCES,
   type CatalogueEntry,
   type Coverage,
   type EndpointInfo,
@@ -216,6 +217,7 @@ export const app = $state<AppState>({
     db_path: "",
     output_dir: "",
     creds_path: "",
+    preferences: { ...DEFAULT_PREFERENCES, watchlists: [] },
   },
   activity: [],
   toasts: [],
@@ -729,7 +731,9 @@ function _announceRun(snap: QueueSnapshot) {
   if (failed > 0) parts.push(`${failed} failed`);
   const body = parts.join(", ");
   log(failed > 0 ? "warn" : "info", `Queue finished — ${body}`);
-  void notify("Downloads finished", body);
+  if (app.settings.preferences?.notify_on_complete ?? true) {
+    void notify("Downloads finished", body);
+  }
 }
 
 function _finishedCount(snap: QueueSnapshot | null): number {
