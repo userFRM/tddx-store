@@ -49,6 +49,10 @@ pub struct Pool {
     queue: Queue,
     tiers: UserTiers,
     options: PoolOptions,
+    /// Set by the first worker to see the session invalidated. Every
+    /// worker checks it before claiming, so the pool stops rather than
+    /// burning through the queue on a dead session.
+    halted: Arc<std::sync::atomic::AtomicBool>,
     progress: Arc<Mutex<Progress>>,
     events_tx: Option<mpsc::Sender<ProgressEvent>>,
 }
@@ -64,6 +68,7 @@ impl Pool {
             queue,
             tiers,
             options: PoolOptions::default(),
+            halted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             progress: Arc::new(Mutex::new(Progress::new())),
             events_tx: None,
         }
@@ -99,7 +104,10 @@ impl Pool {
             let queue = self.queue.clone();
             let progress = self.progress.clone();
             let tx = self.events_tx.clone();
-            handles.push(tokio::spawn(run_worker(client, queue, progress, tx, split)));
+            let halted = self.halted.clone();
+            handles.push(tokio::spawn(run_worker(
+                client, queue, progress, tx, split, halted,
+            )));
         }
         for h in handles {
             let _ = h.await;
@@ -114,8 +122,13 @@ async fn run_worker(
     progress: Arc<Mutex<Progress>>,
     tx: Option<mpsc::Sender<ProgressEvent>>,
     split_failed_windows: bool,
+    halted: Arc<std::sync::atomic::AtomicBool>,
 ) {
+    use std::sync::atomic::Ordering;
     loop {
+        if halted.load(Ordering::Acquire) {
+            break;
+        }
         let task = match queue.claim_next().await {
             Ok(Some(t)) => t,
             Ok(None) => break,
@@ -230,6 +243,24 @@ async fn run_worker(
                     }
                 }
             },
+            Err(e) if classify(&e.to_string()) == FailureKind::SessionLost => {
+                // Not the task's fault: hand it back untouched and stop
+                // the pool. The first worker to notice reports it; the
+                // rest just return their tasks.
+                if let Err(err) = queue.release(&task.id).await {
+                    tracing::error!(?err, task_id = %task.id, "could not release task");
+                }
+                let first = !halted.swap(true, Ordering::AcqRel);
+                if first {
+                    if let Some(tx) = &tx {
+                        let _ = tx
+                            .send(ProgressEvent::SessionLost {
+                                message: e.to_string(),
+                            })
+                            .await;
+                    }
+                }
+            }
             Err(e) => {
                 let mut msg = e.to_string();
                 // A task can now be a year wide, or a year wide per
@@ -285,7 +316,11 @@ fn effective_workers(budget: usize, cap: Option<usize>) -> usize {
 /// a malformed argument fails identically at any width, so splitting it
 /// just doubles the number of rows saying the same thing.
 async fn split_failed_window(queue: &Queue, task: &Task, error: &str) -> Option<usize> {
-    if is_request_error(error) {
+    // Width only matters for a failure width can cause. Splitting a
+    // lost session or a malformed request just doubles the rows saying
+    // the same thing — which is what happened when a second client
+    // signed in mid-run and every affected window was bisected.
+    if classify(error) != FailureKind::Transient {
         return None;
     }
     let (first, second) = task.spec.split_window()?;
@@ -312,14 +347,35 @@ async fn split_failed_window(queue: &Queue, task: &Task, error: &str) -> Option<
     Some(queued)
 }
 
-/// Whether the server rejected the shape of the request rather than
-/// failing to deliver it. These are the app's bugs, not transient.
-fn is_request_error(msg: &str) -> bool {
+/// What a failure says, which decides what to do about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FailureKind {
+    /// The session was invalidated — another client signed in to the
+    /// same account. Nothing is wrong with the task, and retrying on
+    /// this session cannot succeed.
+    SessionLost,
+    /// The server refused the shape of the request. Fails identically
+    /// at any width and on any retry: the app's bug, not the network's.
+    BadRequest,
+    /// Anything else: timeouts, resets, unavailability. Worth retrying,
+    /// and worth narrowing if the task covers a window.
+    Transient,
+}
+
+fn classify(msg: &str) -> FailureKind {
     let m = msg.to_lowercase();
-    m.contains("missing required arg")
+    if m.contains("unauthenticated") || m.contains("invalid session") {
+        FailureKind::SessionLost
+    } else if m.contains("missing required arg")
         || m.contains("unknown endpoint")
         || m.contains("invalidargument")
+        || m.contains("permissiondenied")
         || m.contains("cannot specify")
+    {
+        FailureKind::BadRequest
+    } else {
+        FailureKind::Transient
+    }
 }
 
 struct HeartbeatGuard {
@@ -413,7 +469,39 @@ async fn run_one(client: &Client, task: &Task) -> crate::Result<Outcome> {
 
 #[cfg(test)]
 mod pool_tests {
-    use super::effective_workers;
+    use super::{classify, effective_workers, FailureKind};
+
+    /// The exact message ThetaData sends when a second client signs in
+    /// to the same account.
+    #[test]
+    fn a_taken_over_session_is_recognised() {
+        let msg = r#"invoke stock_history_eod: Server(Grpc { kind: Unauthenticated, message: "Invalid session ID. This can occur if more than one terminal is running." })"#;
+        assert_eq!(classify(msg), FailureKind::SessionLost);
+    }
+
+    /// Width cannot fix these, so they must never be split.
+    #[test]
+    fn malformed_requests_are_not_transient() {
+        for msg in [
+            "missing required arg 'start_date' for endpoint 'stock_history_eod'",
+            r#"Server(Grpc { kind: InvalidArgument, message: "Too many days" })"#,
+            "Error parsing expiration Cannot specify '*' for the date",
+            r#"Server(Grpc { kind: PermissionDenied, message: "tier" })"#,
+        ] {
+            assert_eq!(classify(msg), FailureKind::BadRequest, "{msg}");
+        }
+    }
+
+    #[test]
+    fn network_trouble_is_worth_retrying() {
+        for msg in [
+            "Server(Timeout { duration_ms: 8000 })",
+            r#"Server(Grpc { kind: Unavailable, message: "connection reset" })"#,
+            "panic: something",
+        ] {
+            assert_eq!(classify(msg), FailureKind::Transient, "{msg}");
+        }
+    }
 
     #[test]
     fn no_cap_uses_the_whole_budget() {

@@ -31,6 +31,13 @@ pub enum ProgressEvent {
         error: String,
         millis: u64,
     },
+    /// The ThetaData session this app was using was invalidated —
+    /// typically because another client signed in to the same account,
+    /// since only one session is live at a time. Every in-flight task
+    /// has been handed back to the queue and the pool has stopped.
+    SessionLost {
+        message: String,
+    },
     /// Whole-pool snapshot for ETA / dashboard.
     Pool {
         running: usize,

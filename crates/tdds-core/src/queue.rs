@@ -140,6 +140,8 @@ impl Queue {
                 transforms_json   TEXT,
                 extra_json        TEXT,
                 batch_id          TEXT,
+                started_ms        INTEGER,
+                duration_ms       INTEGER,
                 claimed_by        TEXT,
                 claimed_at        INTEGER,
                 last_heartbeat_at INTEGER
@@ -156,6 +158,13 @@ impl Queue {
         Self::add_column_if_missing(pool, "ALTER TABLE tasks ADD COLUMN extra_json TEXT").await?;
         Self::add_column_if_missing(pool, "ALTER TABLE tasks ADD COLUMN end_date TEXT").await?;
         Self::add_column_if_missing(pool, "ALTER TABLE tasks ADD COLUMN batch_id TEXT").await?;
+        // Timing that survives the task finishing. `claimed_at` is a
+        // lease and is cleared on completion, so it cannot say how long
+        // the work took — which is exactly what an ETA needs.
+        Self::add_column_if_missing(pool, "ALTER TABLE tasks ADD COLUMN started_ms INTEGER")
+            .await?;
+        Self::add_column_if_missing(pool, "ALTER TABLE tasks ADD COLUMN duration_ms INTEGER")
+            .await?;
         Self::add_column_if_missing(pool, "ALTER TABLE tasks ADD COLUMN claimed_by TEXT").await?;
         Self::add_column_if_missing(pool, "ALTER TABLE tasks ADD COLUMN claimed_at INTEGER")
             .await?;
@@ -280,6 +289,8 @@ impl Queue {
                    claimed_by = ?,
                    claimed_at = ?,
                    last_heartbeat_at = ?,
+                   started_ms = ?,
+                   duration_ms = NULL,
                    finished_at = NULL
              WHERE id = (
                  SELECT id FROM tasks
@@ -294,6 +305,7 @@ impl Queue {
         .bind(&self.owner_id)
         .bind(now)
         .bind(now)
+        .bind(Utc::now().timestamp_millis())
         .fetch_optional(&self.pool)
         .await?;
         let Some(row) = row else {
@@ -339,12 +351,14 @@ impl Queue {
     pub async fn mark_done(&self, id: &str, rows: i64, bytes: i64) -> crate::Result<bool> {
         let r = sqlx::query(
             "UPDATE tasks SET status='done', rows=?, bytes=?, finished_at=?, \
+             duration_ms = ? - started_ms, \
              claimed_by=NULL, claimed_at=NULL, last_heartbeat_at=NULL \
              WHERE id=? AND status='running' AND claimed_by=?",
         )
         .bind(rows)
         .bind(bytes)
         .bind(Utc::now().timestamp())
+        .bind(Utc::now().timestamp_millis())
         .bind(id)
         .bind(&self.owner_id)
         .execute(&self.pool)
@@ -355,10 +369,33 @@ impl Queue {
     pub async fn mark_empty(&self, id: &str) -> crate::Result<bool> {
         let r = sqlx::query(
             "UPDATE tasks SET status='empty', finished_at=?, \
+             duration_ms = ? - started_ms, \
              claimed_by=NULL, claimed_at=NULL, last_heartbeat_at=NULL \
              WHERE id=? AND status='running' AND claimed_by=?",
         )
         .bind(Utc::now().timestamp())
+        .bind(Utc::now().timestamp_millis())
+        .bind(id)
+        .bind(&self.owner_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected() == 1)
+    }
+
+    /// Hand a running task back to the queue as though it had never
+    /// been claimed: pending, attempt not counted, no error recorded.
+    ///
+    /// For a failure that says nothing about the task — the session it
+    /// ran on was invalidated underneath it. Marking it failed would
+    /// blame the download for something that happened to the account,
+    /// and it would need retrying by hand.
+    pub async fn release(&self, id: &str) -> crate::Result<bool> {
+        let r = sqlx::query(
+            "UPDATE tasks SET status='pending', attempts=MAX(attempts - 1, 0), \
+             started_ms=NULL, duration_ms=NULL, finished_at=NULL, error=NULL, \
+             claimed_by=NULL, claimed_at=NULL, last_heartbeat_at=NULL \
+             WHERE id=? AND status='running' AND claimed_by=?",
+        )
         .bind(id)
         .bind(&self.owner_id)
         .execute(&self.pool)
@@ -620,12 +657,11 @@ impl Queue {
                       COALESCE(SUM(rows), 0)                     AS rows,
                       COALESCE(SUM(bytes), 0)                    AS bytes,
                       MIN(created_at)                            AS created_at,
-                      MIN(claimed_at)                            AS started_at,
+                      MIN(started_ms) / 1000                     AS started_at,
                       MAX(finished_at)                           AS finished_at,
                       AVG(CASE WHEN status IN ('done', 'empty')
-                                AND claimed_at IS NOT NULL
-                                AND finished_at IS NOT NULL
-                               THEN CAST(finished_at - claimed_at AS REAL) END) AS avg_task_secs
+                                AND duration_ms IS NOT NULL
+                               THEN duration_ms / 1000.0 END)   AS avg_task_secs
                  FROM tasks
                 WHERE batch_id IS NOT NULL
                 GROUP BY batch_id
@@ -893,6 +929,41 @@ mod tests {
 
     /// Unbatched rows — everything written before batches existed —
     /// must not appear as one enormous nameless download.
+    /// The lease timestamps are cleared when a task finishes, so a
+    /// duration derived from them vanished at exactly the moment it
+    /// became known — and the ETA read "estimating…" for the whole run.
+    #[tokio::test]
+    async fn a_finished_task_keeps_how_long_it_took() {
+        let queue = single_connection_memory_queue("owner").await;
+        enqueue_batch(&queue, "b1", 2).await;
+        finish_next(&queue, TaskStatus::Done).await;
+        finish_next(&queue, TaskStatus::Empty).await;
+
+        let b = &queue.batches(10).await.unwrap()[0];
+        assert!(
+            b.avg_task_secs.is_some(),
+            "the ETA needs a measured duration"
+        );
+        assert!(b.avg_task_secs.unwrap() >= 0.0);
+        assert!(b.started_at.is_some(), "average speed needs a start");
+    }
+
+    /// A task on a session that was taken over is handed back as if it
+    /// had never run — not failed, not counted as an attempt.
+    #[tokio::test]
+    async fn a_released_task_goes_back_in_line_unpenalised() {
+        let queue = single_connection_memory_queue("owner").await;
+        let ids = enqueue_batch(&queue, "b1", 1).await;
+        let t = queue.claim_next().await.unwrap().unwrap();
+        assert_eq!(t.attempts, 1);
+
+        assert!(queue.release(&t.id).await.unwrap());
+        assert_eq!(status_of(&queue, &ids[0]).await, TaskStatus::Pending);
+        let again = queue.claim_next().await.unwrap().unwrap();
+        assert_eq!(again.attempts, 1, "the lost attempt does not count");
+        assert!(again.error.is_none());
+    }
+
     #[tokio::test]
     async fn rows_without_a_batch_are_not_a_batch() {
         let queue = single_connection_memory_queue("owner").await;

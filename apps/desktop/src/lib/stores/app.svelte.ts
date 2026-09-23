@@ -172,6 +172,10 @@ interface AppState {
   batches: Batch[];
   /** Measured transfer rate. See `recordTransfer`. */
   transfer: TransferStats;
+  /** Set when ThetaData invalidated this app's session — another
+   *  client signed in to the same account. Downloads are paused, not
+   *  failed, until the user reconnects. */
+  sessionLost: string | null;
 }
 
 /** What the downloads pane and transfers view show about speed. */
@@ -260,6 +264,7 @@ export const app = $state<AppState>({
   coverageLoading: false,
   batches: [],
   transfer: { bytesPerSec: 0, history: [] },
+  sessionLost: null,
 });
 
 // ── Theme ─────────────────────────────────────────────────────
@@ -465,6 +470,7 @@ export type WorkerEvent =
   | { type: "done"; task_id: string; rows: number; bytes: number; millis: number }
   | { type: "empty"; task_id: string; millis: number }
   | { type: "failed"; task_id: string; error: string; millis: number }
+  | { type: "session_lost"; message: string }
   | { type: "pool";
       running: number;
       queued: number;
@@ -488,12 +494,26 @@ export async function startProgressListener() {
       // Track in-flight set so the UI can show "running tasks" without
       // waiting on the 1.5 s SQL poll. Recent events also push into the
       // activity log so the console feels live.
+      if (ev.type === "session_lost") {
+        app.sessionLost = ev.message;
+        app.runningTaskIds = [];
+        _updateRate();
+        log("warn", "ThetaData session taken over by another sign-in; downloads paused");
+        if (app.settings.preferences?.notify_on_complete ?? true) {
+          void notify(
+            "Downloads paused",
+            "Another app signed in to your ThetaData account. Reconnect to resume.",
+          );
+        }
+      }
       if (ev.type === "started") {
         app.runningTaskIds = [...app.runningTaskIds.filter((id) => id !== ev.task_id), ev.task_id];
+        _updateRate();
       } else if (ev.type === "done" || ev.type === "empty" || ev.type === "failed") {
         app.runningTaskIds = app.runningTaskIds.filter((id) => id !== ev.task_id);
+        if (ev.type === "done") recordTransfer(ev.bytes, ev.millis);
+        else _updateRate();
       }
-      if (ev.type === "done") recordTransfer(ev.bytes);
       // Trigger an immediate poll so the UI snapshot picks up the new
       // SQLite state without waiting for the next tick.
       void _pollOnce();
@@ -700,46 +720,63 @@ function _busy(snap: QueueSnapshot | null): boolean {
 
 // ── Transfer rate ────────────────────────────────────────────
 //
-// Measured from what finished, not from the size of the output tree.
-// The old estimate diffed `bytes_on_disk`, which the backend refreshes
-// at most every 15 s because it costs a walk of the whole directory, so
-// the rate read zero between refreshes and spiked when one landed.
+// Live, and zero the moment nothing is moving.
 //
-// Bytes are credited when a task completes, which is the only moment
-// the server's transfer is known; a window long enough to span several
-// completions smooths that into a rate someone can read.
-const RATE_WINDOW_MS = 10_000;
+// The SDK does not expose bytes as they arrive — its gRPC connector is
+// private — so the wire itself cannot be metered from here. What *is*
+// measured is every finished transfer: its size and how long it took.
+// That gives a per-transfer speed; current throughput is that speed
+// times the number of transfers in flight right now.
+//
+// Driven by events, not a clock: a worker starting or finishing moves
+// the number immediately, and when the last one finishes it reads zero
+// at once. The previous version credited bytes over a trailing 10 s
+// window sampled once a second, so it lagged by seconds and kept
+// reporting throughput for ten seconds after everything had finished.
+const SPEED_SAMPLES = 24;
 const HISTORY_POINTS = 60;
-const _completions: { t: number; bytes: number }[] = [];
-let _rateTimer: ReturnType<typeof setInterval> | null = null;
+const HISTORY_TICK_MS = 500;
+/** Recent per-transfer speeds, bytes per second. */
+const _speeds: number[] = [];
+let _historyTimer: ReturnType<typeof setInterval> | null = null;
 
-function recordTransfer(bytes: number) {
-  if (bytes > 0) _completions.push({ t: Date.now(), bytes });
-  _ensureRateTimer();
+function recordTransfer(bytes: number, millis: number) {
+  // A near-instant task (already on disk, or a tiny response) says more
+  // about latency than bandwidth; leave it out of the speed estimate.
+  if (bytes > 0 && millis >= 20) {
+    _speeds.push(bytes / (millis / 1000));
+    if (_speeds.length > SPEED_SAMPLES) _speeds.shift();
+  }
+  _updateRate();
 }
 
-function _ensureRateTimer() {
-  if (_rateTimer !== null) return;
-  _rateTimer = setInterval(_sampleRate, 1000);
+/** Median, so one unusually fast or slow transfer cannot swing it. */
+function _typicalSpeed(): number {
+  if (_speeds.length === 0) return 0;
+  const sorted = [..._speeds].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
-function _sampleRate() {
-  const now = Date.now();
-  while (_completions.length && now - _completions[0].t > RATE_WINDOW_MS) {
-    _completions.shift();
-  }
-  const bytes = _completions.reduce((s, c) => s + c.bytes, 0);
-  const rate = bytes / (RATE_WINDOW_MS / 1000);
-  const history = [...app.transfer.history, rate].slice(-HISTORY_POINTS);
-  app.transfer = { bytesPerSec: rate, history };
+function _updateRate() {
+  const inFlight = app.runningTaskIds.length;
+  const rate = inFlight === 0 ? 0 : inFlight * _typicalSpeed();
+  app.transfer = { ...app.transfer, bytesPerSec: rate };
+  if (inFlight > 0) _startHistory();
+}
 
-  // Stop ticking once nothing is moving and the chart has flattened, so
-  // an idle app does no periodic work.
-  const idle = !_busy(app.queueSnap);
-  if (idle && _completions.length === 0 && history.every((v) => v === 0)) {
-    clearInterval(_rateTimer!);
-    _rateTimer = null;
-  }
+function _startHistory() {
+  if (_historyTimer !== null) return;
+  _historyTimer = setInterval(() => {
+    const rate = app.transfer.bytesPerSec;
+    const history = [...app.transfer.history, rate].slice(-HISTORY_POINTS);
+    app.transfer = { bytesPerSec: rate, history };
+    // Record the drop to zero, then stop: an idle app does no work.
+    if (rate === 0) {
+      clearInterval(_historyTimer!);
+      _historyTimer = null;
+    }
+  }, HISTORY_TICK_MS);
 }
 
 /** Counts at the moment the queue last went from idle to busy, so the
@@ -762,6 +799,16 @@ async function _pollOnce() {
     // Home dashboard kept showing pre-download numbers until the user
     // navigated away and back.
     if (_finishedCount(snap) > finishedBefore) void loadCoverage(true);
+
+    // The in-flight set is built from worker events, so a task that
+    // vanished without one — removed mid-request, or orphaned by a
+    // restart — would keep the meter above zero forever. The queue is
+    // the ground truth: when it says nothing is running, nothing is.
+    const running = snap.counts.find(([k]) => k === "running")?.[1] ?? 0;
+    if (running === 0 && app.runningTaskIds.length > 0) {
+      app.runningTaskIds = [];
+      _updateRate();
+    }
 
     const isBusy = _busy(snap);
     if (isBusy && !wasBusy) {
@@ -831,6 +878,18 @@ export async function refreshQueueSnapshot() {
 }
 
 // ── Connection ───────────────────────────────────────────────
+/** Sign back in after the session was taken over, and pick the queue up
+ *  where it stopped. Signing in again ends the other client's session in
+ *  turn — only one is live per account — which is why this waits for
+ *  the user rather than happening on its own: doing it automatically
+ *  would fight whatever else is running until one of them gave up. */
+export async function reconnectAndResume() {
+  await connect();
+  app.sessionLost = null;
+  await api.runQueue().catch(() => false);
+  await refreshQueueSnapshot();
+}
+
 export async function connect() {
   app.connState = "connecting";
   app.connMsg = "Connecting…";

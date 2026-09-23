@@ -31,6 +31,7 @@
   } from "lucide-svelte";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import TransfersList from "$lib/queue/TransfersList.svelte";
+  import { friendlyError } from "$lib/util/errors";
   import { app, log, navigate, refreshQueueSnapshot } from "$lib/stores/app.svelte";
   import { api, fmtBytes, fmtNum, type TaskView } from "$lib/api";
 
@@ -445,7 +446,7 @@
             {/if}
 
             {#if task.error}
-              <div class="task-error text-body-sm">{task.error}</div>
+              <div class="task-error text-body-sm" title={task.error}>{friendlyError(task.error)}</div>
             {/if}
           </div>
 
@@ -572,6 +573,7 @@
   /* Header */
   .queue-header {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: var(--sp-4);
@@ -595,8 +597,12 @@
     line-height: 1.15;
   }
 
+  /* Each figure stays on one line; with three action buttons beside
+     them the flex row used to squeeze "157.4 MB on disk" into three. */
   .queue-meta {
     display: flex;
+    flex-wrap: wrap;
+    white-space: nowrap;
     align-items: center;
     gap: var(--sp-2);
     font-size: var(--text-body-sm);
@@ -607,9 +613,10 @@
 
   .header-actions {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--sp-3);
-    flex-shrink: 0;
+    margin-left: auto;
   }
 
   .action-feedback {

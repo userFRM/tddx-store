@@ -20,6 +20,7 @@
     ChevronLeft,
   } from "lucide-svelte";
   import { app, log, refreshQueueSnapshot } from "$lib/stores/app.svelte";
+  import { friendlyError } from "$lib/util/errors";
   import { api, fmtBytes, fmtNum, type TaskView } from "$lib/api";
 
   // ── Throughput ───────────────────────────────────────────────
@@ -265,10 +266,10 @@
               </div>
               <div class="task-meta tabnum">
                 <span class="task-date">{t.date}{t.end_date ? ` → ${t.end_date}` : ""}</span>
-                <span class="sep">·</span>
-                <span>streaming…</span>
-                <span class="sep">·</span>
-                <span class="fg-muted">attempt {t.attempts}</span>
+                {#if t.attempts > 1}
+                  <span class="sep">·</span>
+                  <span class="fg-muted">retry {t.attempts - 1}</span>
+                {/if}
               </div>
             </li>
           {/each}
@@ -328,7 +329,7 @@
               </div>
               {#if t.error}
                 <div class="task-error text-body-sm" title={t.error}>
-                  {t.error.length > 60 ? t.error.slice(0, 60) + "…" : t.error}
+                  {friendlyError(t.error)}
                 </div>
               {/if}
             </li>
