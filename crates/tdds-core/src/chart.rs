@@ -16,12 +16,13 @@ use std::path::Path;
 
 use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::DataType;
+use chrono::Datelike;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::Serialize;
 
-/// Enough points for a wide window at retina resolution, few enough to
-/// draw in one frame.
-pub const MAX_POINTS: usize = 600;
+/// How many candles to aim for when the caller does not say: enough to
+/// read, few enough that each is wide enough to see.
+pub const DEFAULT_TARGET: usize = 120;
 
 const DAY_MS: i64 = 86_400_000;
 
@@ -44,6 +45,75 @@ pub struct Gap {
     pub to_ms: i64,
 }
 
+/// How long one candle spans. Aligned to the calendar, the way every
+/// trading chart does it: a 5-minute candle starts on :00, :05, :10; a
+/// weekly one on Monday; a monthly one on the first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Step {
+    Ms(i64),
+    Week,
+    Month,
+}
+
+impl Step {
+    /// Roughly how long, for choosing between steps. Calendar months
+    /// vary; thirty days is close enough to count candles.
+    fn approx_ms(self) -> i64 {
+        match self {
+            Step::Ms(ms) => ms,
+            Step::Week => 7 * DAY_MS,
+            Step::Month => 30 * DAY_MS,
+        }
+    }
+
+    /// The start of the candle `t` falls in.
+    fn floor(self, t: i64) -> i64 {
+        match self {
+            Step::Ms(ms) => t.div_euclid(ms) * ms,
+            Step::Week | Step::Month => {
+                let day = t.div_euclid(DAY_MS);
+                let Some(date) =
+                    chrono::DateTime::from_timestamp_millis(day * DAY_MS).map(|d| d.date_naive())
+                else {
+                    return day * DAY_MS;
+                };
+                let start = match self {
+                    Step::Week => {
+                        date - chrono::Duration::days(i64::from(
+                            date.weekday().num_days_from_monday(),
+                        ))
+                    }
+                    _ => date.with_day(1).unwrap_or(date),
+                };
+                start
+                    .and_hms_opt(0, 0, 0)
+                    .map_or(day * DAY_MS, |d| d.and_utc().timestamp_millis())
+            }
+        }
+    }
+}
+
+/// The candle intervals the chart offers, finest first.
+const STEPS: &[(&str, Step)] = &[
+    ("1s", Step::Ms(1_000)),
+    ("5s", Step::Ms(5_000)),
+    ("15s", Step::Ms(15_000)),
+    ("30s", Step::Ms(30_000)),
+    ("1m", Step::Ms(60_000)),
+    ("5m", Step::Ms(300_000)),
+    ("15m", Step::Ms(900_000)),
+    ("30m", Step::Ms(1_800_000)),
+    ("1h", Step::Ms(3_600_000)),
+    ("1D", Step::Ms(DAY_MS)),
+    ("1W", Step::Week),
+    ("1M", Step::Month),
+];
+
+/// Fewer candles than this and the chart says nothing.
+const MIN_CANDLES: i64 = 8;
+/// More than this and no width can show them as candles.
+const MAX_CANDLES: i64 = 1_500;
+
 #[derive(Debug, Serialize)]
 pub struct ChartSeries {
     pub shape: Shape,
@@ -62,6 +132,12 @@ pub struct ChartSeries {
     pub ask: Vec<Option<f64>>,
     pub volume: Vec<Option<f64>>,
     pub gaps: Vec<Gap>,
+    /// The interval each candle spans, e.g. `5m`, `1D`.
+    pub step: String,
+    /// Every interval this file can sensibly be drawn at: no finer than
+    /// the data itself, and yielding between a handful of candles and
+    /// what a screen can hold.
+    pub steps: Vec<String>,
 }
 
 /// One row, reduced to what a chart draws.
@@ -76,7 +152,11 @@ struct Point {
     volume: Option<f64>,
 }
 
-pub fn series(path: &Path, max_points: usize) -> crate::Result<ChartSeries> {
+/// Summarise `path` into candles of `step` (e.g. `"5m"`), or, when
+/// `step` is `None` or not offered for this file, the finest interval
+/// that fits in `target` candles — so the chart breathes at whatever
+/// width it is drawn.
+pub fn series(path: &Path, step: Option<&str>, target: usize) -> crate::Result<ChartSeries> {
     if path.extension().and_then(|e| e.to_str()) != Some("parquet") {
         return Err(crate::Error::Other(
             "the chart reads Parquet files; this one was written in another format".into(),
@@ -128,7 +208,7 @@ pub fn series(path: &Path, max_points: usize) -> crate::Result<ChartSeries> {
     points.sort_by_key(|p| p.t);
     let rows = points.len();
     let gaps = find_gaps(&points, daily);
-    let buckets = bucket(&points, max_points.max(2));
+    let (step_name, steps, buckets) = choose_and_bucket(&points, daily, step, target.max(2));
 
     let mut out = ChartSeries {
         shape,
@@ -143,6 +223,8 @@ pub fn series(path: &Path, max_points: usize) -> crate::Result<ChartSeries> {
         ask: Vec::with_capacity(buckets.len()),
         volume: Vec::with_capacity(buckets.len()),
         gaps,
+        step: step_name,
+        steps,
     };
     for b in buckets {
         out.x.push(b.t);
@@ -157,20 +239,99 @@ pub fn series(path: &Path, max_points: usize) -> crate::Result<ChartSeries> {
     Ok(out)
 }
 
-/// Merge consecutive points into at most `max` buckets of equal time
-/// width. Open is the first, close the last, high and low the extremes,
-/// volume the sum; bid and ask are the last quote in the bucket. An
-/// empty bucket is skipped rather than drawn as a zero, so a hole in
-/// the data shows as a hole.
-fn bucket(points: &[Point], max: usize) -> Vec<Point> {
-    if points.len() <= max {
-        return points.iter().map(|p| Point { ..*p }).collect();
+/// Which intervals suit these points, which one to use, and the
+/// candles at that interval.
+fn choose_and_bucket(
+    points: &[Point],
+    daily: bool,
+    wanted: Option<&str>,
+    target: usize,
+) -> (String, Vec<String>, Vec<Point>) {
+    if points.len() < 2 {
+        return (
+            "—".into(),
+            Vec::new(),
+            points.iter().map(|p| Point { ..*p }).collect(),
+        );
     }
-    let (t0, t1) = (points[0].t, points[points.len() - 1].t);
-    let width = ((t1 - t0) / max as i64).max(1);
-    let mut out: Vec<Point> = Vec::with_capacity(max);
+    let native = median_spacing(points);
+
+    // Counted, not estimated from the time span: weekends and nights
+    // have no candles, so a span-based estimate put a year of days at
+    // 365 when it is 260, and rejected daily candles that would fit.
+    let offered: Vec<(&str, Step, i64)> = STEPS
+        .iter()
+        .filter_map(|&(name, st)| {
+            let ms = st.approx_ms();
+            let finer_than_data = ms * 10 < native * 9;
+            let sub_day_on_daily = daily && ms < DAY_MS;
+            if finer_than_data || sub_day_on_daily {
+                return None;
+            }
+            let n = count_candles(points, st);
+            (MIN_CANDLES..=MAX_CANDLES)
+                .contains(&n)
+                .then_some((name, st, n))
+        })
+        .collect();
+
+    // What was asked for, if this file offers it; otherwise the finest
+    // interval that fits the width; otherwise the coarsest there is.
+    let chosen = wanted
+        .and_then(|w| offered.iter().find(|(n, ..)| *n == w))
+        .or_else(|| offered.iter().find(|(.., n)| *n <= target as i64))
+        .or_else(|| offered.last())
+        .map(|&(name, st, _)| (name, st));
+
+    let names = offered.iter().map(|(n, ..)| (*n).to_string()).collect();
+    match chosen {
+        Some((name, st)) => (name.to_string(), names, bucket_by(points, st)),
+        // Too little data to offer any interval: draw it as it is.
+        None => (
+            "raw".into(),
+            names,
+            points.iter().map(|p| Point { ..*p }).collect(),
+        ),
+    }
+}
+
+/// How many candles `points` make at `step`: one per distinct candle
+/// start, since the points are in time order.
+fn count_candles(points: &[Point], step: Step) -> i64 {
+    let mut n = 0;
+    let mut last = None;
     for p in points {
-        let start = t0 + ((p.t - t0) / width) * width;
+        let start = step.floor(p.t);
+        if last != Some(start) {
+            n += 1;
+            last = Some(start);
+        }
+    }
+    n
+}
+
+/// Median time between consecutive rows.
+fn median_spacing(points: &[Point]) -> i64 {
+    let mut d: Vec<i64> = points
+        .windows(2)
+        .map(|w| w[1].t - w[0].t)
+        .filter(|d| *d > 0)
+        .collect();
+    if d.is_empty() {
+        return 1;
+    }
+    d.sort_unstable();
+    d[d.len() / 2]
+}
+
+/// Merge points into calendar-aligned candles of `step`. Open is the
+/// first, close the last, high and low the extremes, volume the sum;
+/// bid and ask are the last quote in the candle. A candle with no rows
+/// is not emitted, so a hole in the data stays a hole.
+fn bucket_by(points: &[Point], step: Step) -> Vec<Point> {
+    let mut out: Vec<Point> = Vec::new();
+    for p in points {
+        let start = step.floor(p.t);
         match out.last_mut() {
             Some(b) if b.t == start => {
                 b.high = max_opt(b.high, p.high);
@@ -398,6 +559,82 @@ mod tests {
         assert_eq!(px(109.43), Some(109.43));
     }
 
+    fn day(d: i64) -> Point {
+        p(d * DAY_MS, 100.0 + d as f64)
+    }
+
+    /// A year of daily bars at a normal width: candles, not a smear.
+    #[test]
+    fn a_year_of_days_becomes_weekly_candles_when_days_would_not_fit() {
+        let pts: Vec<Point> = (0..365).filter(|d| d % 7 < 5).map(day).collect();
+        let (step, offered, candles) = choose_and_bucket(&pts, true, None, 120);
+        assert_eq!(step, "1W", "260 days do not fit in 120; weeks do");
+        assert!(candles.len() <= 60);
+        assert!(
+            offered.contains(&"1D".to_string()),
+            "days are still on offer"
+        );
+        assert!(
+            !offered
+                .iter()
+                .any(|s| s.ends_with('s') || s.ends_with('m') || s == "1h"),
+            "no intraday interval for daily data: {offered:?}"
+        );
+    }
+
+    #[test]
+    fn a_wide_chart_keeps_daily_candles() {
+        let pts: Vec<Point> = (0..365).filter(|d| d % 7 < 5).map(day).collect();
+        let (step, _, candles) = choose_and_bucket(&pts, true, None, 300);
+        assert_eq!(step, "1D");
+        assert_eq!(candles.len(), pts.len());
+    }
+
+    #[test]
+    fn an_explicit_interval_is_honoured_when_offered() {
+        let pts: Vec<Point> = (0..365).filter(|d| d % 7 < 5).map(day).collect();
+        let (step, _, candles) = choose_and_bucket(&pts, true, Some("1M"), 120);
+        assert_eq!(step, "1M");
+        assert!((12..=13).contains(&candles.len()));
+        // Not offered — finer than the data — so the choice falls back.
+        let (step, ..) = choose_and_bucket(&pts, true, Some("5m"), 120);
+        assert_ne!(step, "5m");
+    }
+
+    /// A session of one-second bars offers minutes and up, never an
+    /// interval finer than the data.
+    #[test]
+    fn intraday_intervals_start_at_the_data_resolution() {
+        let pts: Vec<Point> = (0..23_400)
+            .map(|s| p(NINE_THIRTY + s * 1_000, 100.0))
+            .collect();
+        let (step, offered, candles) = choose_and_bucket(&pts, false, None, 120);
+        assert_eq!(step, "5m", "78 five-minute candles fit in 120");
+        assert_eq!(candles.len(), 78);
+        assert!(
+            !offered.contains(&"1s".to_string()),
+            "23,400 one-second candles cannot be drawn"
+        );
+    }
+
+    #[test]
+    fn weekly_candles_start_on_monday() {
+        // 2024-01-03 is a Wednesday; its week starts Monday 2024-01-01.
+        let wed = chrono::NaiveDate::from_ymd_opt(2024, 1, 3)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis();
+        let mon = chrono::NaiveDate::from_ymd_opt(2024, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis();
+        assert_eq!(Step::Week.floor(wed), mon);
+    }
+
     #[test]
     fn bucketing_keeps_the_extremes() {
         let mut pts: Vec<Point> = (0..10_000).map(|s| p(s * 1_000, 100.0)).collect();
@@ -406,8 +643,9 @@ mod tests {
         pts[7_777].low = Some(1.0);
         pts[7_777].high = Some(1.0);
 
-        let b = bucket(&pts, 100);
-        assert!(b.len() <= 101);
+        // 10,000 one-second rows at 5-minute candles.
+        let b = bucket_by(&pts, Step::Ms(300_000));
+        assert!(b.len() <= 35);
         let hi = b.iter().filter_map(|x| x.high).fold(f64::MIN, f64::max);
         let lo = b.iter().filter_map(|x| x.low).fold(f64::MAX, f64::min);
         assert_eq!(hi, 250.0, "a spike must survive downsampling");

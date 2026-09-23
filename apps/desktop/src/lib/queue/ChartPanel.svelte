@@ -3,14 +3,15 @@
    * One downloaded file, drawn so its completeness is obvious.
    *
    * Deliberately one question per dataset and nothing more: *did I get
-   * what I asked for?* A trade file with a two-hour hole looks identical
-   * to a complete one in a row table, and obvious here. No indicators,
-   * overlays or drawing tools — that is a terminal, not a downloader.
+   * what I asked for?* No indicators, overlays or drawing tools — that
+   * is a terminal, not a downloader.
    *
-   * The chart follows the columns (see `tdds_core::chart`): candles for
-   * OHLC, a line inside its high–low envelope for a price, a band for a
-   * bid and ask. Gaps the file has, relative to its own rhythm, are
-   * shaded and listed underneath.
+   * Candles are spaced evenly, one slot each, the way trading charts
+   * draw them. Placed by time, a week's five days bunched together with
+   * a weekend-shaped hole beside them, and a day's session left most of
+   * the width to the night. How long each candle spans is chosen to fit
+   * the width — Auto — and can be changed; the backend offers only the
+   * intervals the file can honestly be drawn at.
    */
   import { Loader2, AlertTriangle, CheckCircle2 } from "lucide-svelte";
   import { api, fmtNum, type ChartSeries } from "$lib/api";
@@ -20,16 +21,34 @@
   let data = $state<ChartSeries | null>(null);
   let error = $state("");
   let loading = $state(false);
+  /** `null` is Auto: the finest interval that fits the width. */
+  let step = $state<string | null>(null);
+  let width = $state(0);
+  /** Room for the price axis on the right. */
+  const PAD_R = 64;
+
+  /** About ten pixels a candle: a body you can see, and air between. */
+  const target = $derived(Math.max(20, Math.min(400, Math.floor((width - PAD_R) / 10))));
+  /** The last request made. Deliberately not reactive: reading `data`
+   *  here to decide would make every response trigger the next fetch. */
+  let lastKey = "";
 
   $effect(() => {
     const p = path;
-    if (!p) return;
+    const st = step;
+    if (!p || width === 0) return;
+    const t = target;
+    // Auto refetches only when the width moves far enough to change the
+    // answer — resizing a window a few pixels should not reread a file.
+    const band = st === null ? Math.round(Math.log(t) / Math.log(1.25)) : 0;
+    const key = `${p}|${st}|${band}`;
+    if (key === lastKey) return;
+    lastKey = key;
     let cancelled = false;
     loading = true;
     error = "";
-    data = null;
     api
-      .chartSeries(p)
+      .chartSeries(p, st, t)
       .then((d) => !cancelled && (data = d))
       .catch((e: unknown) => !cancelled && (error = e instanceof Error ? e.message : String(e)))
       .finally(() => !cancelled && (loading = false));
@@ -38,42 +57,47 @@
     };
   });
 
-  // ── Geometry ──────────────────────────────────────────────────
-  const W = 1000;
+  // A different file starts from Auto.
+  $effect(() => {
+    void path;
+    step = null;
+  });
+
+  // ── Geometry: drawn 1:1 in pixels, so text is never stretched ──
   const PRICE_H = 300;
   const VOL_H = 70;
   const GAP_Y = 12;
   const H = PRICE_H + GAP_Y + VOL_H;
-  const PAD_R = 64;
-  const PLOT_W = W - PAD_R;
+  const W = $derived(Math.max(320, width));
+  const PLOT_W = $derived(W - PAD_R);
+
+  const n = $derived(data?.x.length ?? 0);
+  const slot = $derived(n ? PLOT_W / n : 1);
+  const bodyW = $derived(Math.max(1, Math.min(14, slot * 0.66)));
+  const cx = (i: number) => (i + 0.5) * slot;
 
   const bounds = $derived.by(() => {
-    if (!data || data.x.length === 0) return null;
-    const vals: number[] = [];
+    if (!data || n === 0) return null;
+    let lo = Infinity;
+    let hi = -Infinity;
     for (const arr of [data.low, data.high, data.bid, data.ask]) {
-      for (const v of arr) if (v !== null) vals.push(v);
+      for (const v of arr) {
+        if (v === null) continue;
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+      }
     }
-    if (!vals.length) return null;
-    let lo = Math.min(...vals);
-    let hi = Math.max(...vals);
+    if (!isFinite(lo)) return null;
     const pad = (hi - lo || hi * 0.01 || 1) * 0.06;
-    lo -= pad;
-    hi += pad;
-    const t0 = data.x[0];
-    const t1 = data.x[data.x.length - 1];
-    const vmax = Math.max(1, ...data.volume.map((v) => v ?? 0));
-    return { lo, hi, t0, t1: t1 === t0 ? t0 + 1 : t1, vmax };
+    let vmax = 1;
+    for (const v of data.volume) if (v !== null && v > vmax) vmax = v;
+    return { lo: lo - pad, hi: hi + pad, vmax };
   });
 
-  const sx = (t: number) => (bounds ? ((t - bounds.t0) / (bounds.t1 - bounds.t0)) * PLOT_W : 0);
   const sy = (v: number) => (bounds ? PRICE_H - ((v - bounds.lo) / (bounds.hi - bounds.lo)) * PRICE_H : 0);
   const sv = (v: number) => (bounds ? (v / bounds.vmax) * VOL_H : 0);
 
-  const slot = $derived(data && data.x.length ? PLOT_W / data.x.length : 1);
-  const bodyW = $derived(Math.max(1, Math.min(10, slot * 0.7)));
-
-  function path_(ys: (number | null)[]): string {
-    if (!data) return "";
+  function line(ys: (number | null)[]): string {
     let d = "";
     let pen = false;
     ys.forEach((v, i) => {
@@ -81,7 +105,7 @@
         pen = false;
         return;
       }
-      d += `${pen ? "L" : "M"}${sx(data!.x[i]).toFixed(1)},${sy(v).toFixed(1)}`;
+      d += `${pen ? "L" : "M"}${cx(i).toFixed(1)},${sy(v).toFixed(1)}`;
       pen = true;
     });
     return d;
@@ -89,10 +113,9 @@
 
   /** A filled area between two series, broken wherever either is null. */
   function area(top: (number | null)[], bottom: (number | null)[]): string {
-    if (!data) return "";
     const runs: number[][] = [];
     let run: number[] = [];
-    data.x.forEach((_, i) => {
+    top.forEach((_, i) => {
       if (top[i] === null || bottom[i] === null) {
         if (run.length) runs.push(run);
         run = [];
@@ -102,8 +125,8 @@
     return runs
       .filter((r) => r.length > 1)
       .map((r) => {
-        const up = r.map((i) => `${sx(data!.x[i]).toFixed(1)},${sy(top[i]!).toFixed(1)}`);
-        const down = [...r].reverse().map((i) => `${sx(data!.x[i]).toFixed(1)},${sy(bottom[i]!).toFixed(1)}`);
+        const up = r.map((i) => `${cx(i).toFixed(1)},${sy(top[i]!).toFixed(1)}`);
+        const down = [...r].reverse().map((i) => `${cx(i).toFixed(1)},${sy(bottom[i]!).toFixed(1)}`);
         return `M${up.join("L")}L${down.join("L")}Z`;
       })
       .join(" ");
@@ -111,17 +134,30 @@
 
   const hasQuotes = $derived(!!data && data.bid.some((v) => v !== null) && data.ask.some((v) => v !== null));
 
+  /** With candles evenly spaced, a gap has no width of its own; mark
+   *  the boundary between the two candles it falls between. */
+  const gapMarks = $derived.by(() => {
+    if (!data) return [];
+    return data.gaps.map((g) => {
+      let i = 0;
+      while (i < n - 1 && data!.x[i + 1] <= g.from_ms) i++;
+      return { x: (i + 1) * slot, key: g.from_ms };
+    });
+  });
+
   // ── Axes ──────────────────────────────────────────────────────
-  function fmtTime(ms: number, daily: boolean): string {
-    const d = new Date(ms);
-    const iso = d.toISOString();
-    return daily ? iso.slice(0, 10) : iso.slice(11, 16);
+  const multiDay = $derived(!!data && n > 1 && data.x[n - 1] - data.x[0] >= 86_400_000);
+  function fmtTime(ms: number): string {
+    const iso = new Date(ms).toISOString();
+    if (!data || data.daily) return iso.slice(0, 10);
+    return multiDay ? `${iso.slice(5, 10)} ${iso.slice(11, 16)}` : iso.slice(11, 16);
   }
   const xTicks = $derived.by(() => {
-    if (!bounds || !data) return [];
-    return Array.from({ length: 5 }, (_, k) => {
-      const t = bounds.t0 + ((bounds.t1 - bounds.t0) * k) / 4;
-      return { x: sx(t), label: fmtTime(t, data!.daily) };
+    if (!data || n === 0) return [];
+    const count = Math.min(6, n);
+    return Array.from({ length: count }, (_, k) => {
+      const i = count === 1 ? 0 : Math.round((k * (n - 1)) / (count - 1));
+      return { x: cx(i), label: fmtTime(data!.x[i]), first: k === 0, last: k === count - 1 };
     });
   });
   const yTicks = $derived.by(() => {
@@ -137,59 +173,56 @@
   let svgEl = $state<SVGSVGElement | null>(null);
 
   function onMove(e: PointerEvent) {
-    if (!data || !svgEl || !bounds) return;
-    const r = svgEl.getBoundingClientRect();
-    const px = ((e.clientX - r.left) / r.width) * W;
-    if (px > PLOT_W) {
-      hover = null;
-      return;
-    }
-    const t = bounds.t0 + (px / PLOT_W) * (bounds.t1 - bounds.t0);
-    let best = 0;
-    let bestD = Infinity;
-    data.x.forEach((x, i) => {
-      const d = Math.abs(x - t);
-      if (d < bestD) {
-        bestD = d;
-        best = i;
-      }
-    });
-    hover = best;
+    if (!svgEl || n === 0) return;
+    const px = e.clientX - svgEl.getBoundingClientRect().left;
+    hover = px > PLOT_W || px < 0 ? null : Math.min(n - 1, Math.floor(px / slot));
   }
 
-  function fmtGap(g: { from_ms: number; to_ms: number }, daily: boolean): string {
+  function fmtGap(g: { from_ms: number; to_ms: number }): string {
     const mins = Math.round((g.to_ms - g.from_ms) / 60_000);
     const span =
-      daily ? `${Math.round(mins / 1440)} days`
+      data?.daily ? `${Math.round(mins / 1440)} days`
       : mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m`
       : `${mins}m`;
-    return `${fmtTime(g.from_ms, daily)} → ${fmtTime(g.to_ms, daily)} · ${span} with no rows`;
+    return `${fmtTime(g.from_ms)} → ${fmtTime(g.to_ms)} · ${span} with no rows`;
   }
 </script>
 
-{#if loading}
-  <div class="state"><Loader2 size={16} class="spin" /> Reading the file…</div>
-{:else if error}
-  <div class="state bad"><AlertTriangle size={16} /> {error}</div>
-{:else if data && bounds}
-  <div class="chart">
+<div class="chart" bind:clientWidth={width}>
+  {#if data && data.steps.length > 1}
+    <div class="intervals" role="radiogroup" aria-label="Candle interval">
+      <button role="radio" aria-checked={step === null} class:active={step === null} onclick={() => (step = null)}>
+        Auto{step === null && data ? ` · ${data.step}` : ""}
+      </button>
+      {#each data.steps as s (s)}
+        <button role="radio" aria-checked={step === s} class:active={step === s} onclick={() => (step = s)}>{s}</button>
+      {/each}
+    </div>
+  {/if}
+
+  {#if error}
+    <div class="state bad"><AlertTriangle size={16} /> {error}</div>
+  {:else if !data || !bounds}
+    <div class="state"><Loader2 size={16} class="spin" /> Reading the file…</div>
+  {:else}
     <svg
       bind:this={svgEl}
+      width={W}
+      height={H + 18}
       viewBox="0 0 {W} {H + 18}"
-      preserveAspectRatio="none"
+      class:dim={loading}
       onpointermove={onMove}
       onpointerleave={() => (hover = null)}
       role="img"
-      aria-label="Chart of {fmtNum(data.rows)} rows"
+      aria-label="Chart of {fmtNum(data.rows)} rows in {data.step} candles"
     >
       {#each yTicks as t (t.y)}
         <line class="grid" x1="0" x2={PLOT_W} y1={t.y} y2={t.y} />
-        <!-- Kept inside the frame: the top tick sits on the edge. -->
         <text class="axis" x={PLOT_W + 6} y={Math.min(PRICE_H, Math.max(11, t.y + 4))}>{t.label}</text>
       {/each}
 
-      {#each data.gaps as g (g.from_ms)}
-        <rect class="gap" x={sx(g.from_ms)} y="0" width={Math.max(2, sx(g.to_ms) - sx(g.from_ms))} height={H} />
+      {#each gapMarks as g (g.key)}
+        <line class="gap" x1={g.x} x2={g.x} y1="0" y2={H} />
       {/each}
 
       {#if hasQuotes}
@@ -200,11 +233,11 @@
         {#each data.x as x, i (x)}
           {#if data.high[i] !== null && data.low[i] !== null}
             {@const up = (data.close[i] ?? 0) >= (data.open[i] ?? 0)}
-            <line class="wick" class:up class:down={!up} x1={sx(x)} x2={sx(x)} y1={sy(data.high[i]!)} y2={sy(data.low[i]!)} />
+            <line class="wick" class:up class:down={!up} x1={cx(i)} x2={cx(i)} y1={sy(data.high[i]!)} y2={sy(data.low[i]!)} />
             {#if data.open[i] !== null && data.close[i] !== null}
               <rect
                 class="body" class:up class:down={!up}
-                x={sx(x) - bodyW / 2}
+                x={cx(i) - bodyW / 2}
                 y={Math.min(sy(data.open[i]!), sy(data.close[i]!))}
                 width={bodyW}
                 height={Math.max(1, Math.abs(sy(data.open[i]!) - sy(data.close[i]!)))}
@@ -214,32 +247,32 @@
         {/each}
       {:else if data.shape === "line"}
         <path class="envelope" d={area(data.high, data.low)} />
-        <path class="price" d={path_(data.close)} />
+        <path class="price" d={line(data.close)} />
       {:else}
-        <path class="price" d={path_(data.bid.map((b, i) => (b !== null && data!.ask[i] !== null ? (b + data!.ask[i]!) / 2 : null)))} />
+        <path class="price" d={line(data.bid.map((b, i) => (b !== null && data!.ask[i] !== null ? (b + data!.ask[i]!) / 2 : null)))} />
       {/if}
 
       <g transform="translate(0,{PRICE_H + GAP_Y})">
         {#each data.x as x, i (x)}
           {#if data.volume[i]}
-            <rect class="vol" x={sx(x) - bodyW / 2} y={VOL_H - sv(data.volume[i]!)} width={bodyW} height={sv(data.volume[i]!)} />
+            <rect class="vol" x={cx(i) - bodyW / 2} y={VOL_H - sv(data.volume[i]!)} width={bodyW} height={sv(data.volume[i]!)} />
           {/if}
         {/each}
       </g>
 
       {#each xTicks as t (t.x)}
-        <text class="axis" x={t.x} y={H + 14} text-anchor={t.x === 0 ? "start" : t.x >= PLOT_W - 1 ? "end" : "middle"}>{t.label}</text>
+        <text class="axis" x={t.x} y={H + 14} text-anchor={t.first ? "start" : t.last ? "end" : "middle"}>{t.label}</text>
       {/each}
 
       {#if hover !== null}
-        <line class="cross" x1={sx(data.x[hover])} x2={sx(data.x[hover])} y1="0" y2={H} />
+        <line class="cross" x1={cx(hover)} x2={cx(hover)} y1="0" y2={H} />
       {/if}
     </svg>
 
     <div class="readout tabnum">
       {#if hover !== null}
         {@const i = hover}
-        <span class="fg-muted">{fmtTime(data.x[i], data.daily)}{data.daily ? "" : ` · ${new Date(data.x[i]).toISOString().slice(0, 10)}`}</span>
+        <span class="fg-muted">{fmtTime(data.x[i])}</span>
         {#if data.shape === "candles"}
           <span>O {data.open[i]?.toFixed(2) ?? "—"}</span>
           <span>H {data.high[i]?.toFixed(2) ?? "—"}</span>
@@ -253,7 +286,7 @@
         {#if data.volume[i]}<span class="fg-muted">Vol {fmtNum(data.volume[i]!)}</span>{/if}
       {:else}
         <span class="fg-muted">
-          {fmtNum(data.rows)} rows{data.x.length < data.rows ? `, drawn as ${data.x.length} buckets` : ""} · hover for values
+          {fmtNum(data.rows)} rows as {fmtNum(n)} {data.step} candle{n === 1 ? "" : "s"} · hover for values
         </span>
       {/if}
     </div>
@@ -261,21 +294,44 @@
     {#if data.gaps.length}
       <ul class="gaps">
         {#each data.gaps as g (g.from_ms)}
-          <li><AlertTriangle size={13} /> {fmtGap(g, data.daily)}</li>
+          <li><AlertTriangle size={13} /> {fmtGap(g)}</li>
         {/each}
       </ul>
     {:else}
       <p class="complete"><CheckCircle2 size={13} /> No gaps — rows arrive at a steady rhythm from start to end.</p>
     {/if}
-  </div>
-{/if}
+  {/if}
+</div>
 
 <style>
   .chart { display: flex; flex-direction: column; gap: var(--sp-3); padding: var(--sp-4) var(--sp-5); }
-  svg { width: 100%; height: 380px; display: block; touch-action: none; }
+  svg { display: block; touch-action: none; transition: opacity var(--dur-fast) var(--ease-standard); }
+  svg.dim { opacity: 0.5; }
+  .intervals {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    align-self: flex-start;
+    padding: 2px;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+  }
+  .intervals button {
+    border: none;
+    background: none;
+    padding: 3px 9px;
+    border-radius: calc(var(--r-sm) - 2px);
+    font: inherit;
+    font-size: var(--text-caption);
+    font-family: var(--font-numeric);
+    color: var(--fg-muted);
+    cursor: pointer;
+  }
+  .intervals button.active { background: var(--surface-3); color: var(--fg); }
   .grid { stroke: var(--border); stroke-width: 1; vector-effect: non-scaling-stroke; }
   .axis { fill: var(--fg-subtle); font-size: 11px; font-family: var(--font-numeric); }
-  .gap { fill: var(--bad); opacity: 0.12; }
+  .gap { stroke: var(--bad); stroke-width: 2; stroke-dasharray: 4 3; opacity: 0.7; }
   .quote-band { fill: var(--accent); opacity: 0.12; }
   .envelope { fill: var(--accent); opacity: 0.14; }
   .price { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }

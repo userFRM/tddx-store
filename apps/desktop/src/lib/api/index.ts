@@ -162,6 +162,10 @@ export type ChartSeries = {
   ask: (number | null)[];
   volume: (number | null)[];
   gaps: { from_ms: number; to_ms: number }[];
+  /** The interval each candle spans, e.g. "5m", "1D". */
+  step: string;
+  /** Intervals this file can honestly be drawn at. */
+  steps: string[];
 };
 
 export type EnqueuePlan = {
@@ -255,7 +259,10 @@ export const api = {
    *  so the number shown is the number that happens. */
   estimate: (args: EnqueueArgs) => invoke<EnqueuePlan>("estimate", { args }),
   batches: () => invoke<Batch[]>("batches"),
-  chartSeries: (path: string) => invoke<ChartSeries>("chart_series", { path }),
+  /** `step` picks a candle interval ("5m", "1D"); `null` lets the
+   *  backend choose the finest that fits `target` candles. */
+  chartSeries: (path: string, step: string | null, target: number) =>
+    invoke<ChartSeries>("chart_series", { path, step, target }),
   pauseBatch: (id: string) => invoke<number>("pause_batch", { id }),
   resumeBatch: (id: string) => invoke<number>("resume_batch", { id }),
   removeBatch: (id: string) => invoke<number>("remove_batch", { id }),

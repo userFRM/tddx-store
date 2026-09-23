@@ -25,16 +25,21 @@ pub async fn parquet_preview(args: PreviewArgs) -> Result<PreviewResult, String>
         .map_err(|e| e.to_string())
 }
 
-/// A chart's worth of points from one downloaded file, with the gaps
-/// found in it. Runs off the async runtime: a day of trades is millions
-/// of rows to read.
+/// A chart's worth of candles from one downloaded file, with the gaps
+/// found in it. `step` asks for an interval (`"5m"`, `"1D"`); without
+/// one, the finest interval that fits `target` candles is chosen, so
+/// the chart fits the width it is drawn at. Runs off the async runtime:
+/// a day of trades is millions of rows to read.
 #[tauri::command]
-pub async fn chart_series(path: String) -> Result<tdds_core::chart::ChartSeries, String> {
+pub async fn chart_series(
+    path: String,
+    step: Option<String>,
+    target: Option<usize>,
+) -> Result<tdds_core::chart::ChartSeries, String> {
     let path = std::path::PathBuf::from(path);
-    tokio::task::spawn_blocking(move || {
-        tdds_core::chart::series(&path, tdds_core::chart::MAX_POINTS)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-    .map_err(|e| e.to_string())
+    let target = target.unwrap_or(tdds_core::chart::DEFAULT_TARGET);
+    tokio::task::spawn_blocking(move || tdds_core::chart::series(&path, step.as_deref(), target))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
 }
