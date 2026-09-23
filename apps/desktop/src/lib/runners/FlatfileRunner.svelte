@@ -1,14 +1,23 @@
 <script lang="ts">
   /**
-   * One-shot flatfile downloader. Reads `app.endpointRunner._flatfile`
-   * spec set by FlatfilesShelf, asks for a date + output path, hits the
-   * flatfile_download Tauri command. Files come back as a CSV / JSONL
-   * payload at the given output path (one trading day per request).
+   * Queue whole-market flat files for a range of trading days.
+   *
+   * This used to fetch one day straight to a path and forget it: no
+   * progress, no retry, nothing in the Library, and no way to schedule
+   * it. Each served flat file is now a dataset kind, so a range of days
+   * becomes queue tasks like any other download — one per trading day,
+   * visible in Downloads, pausable, retried on failure, filed where the
+   * Library looks.
    */
-  import { X, Loader2, FileArchive, Play, FolderOpen} from "lucide-svelte";
-  import { revealItemInDir } from "@tauri-apps/plugin-opener";
-  import { app, log } from "$lib/stores/app.svelte";
-  import { api, type FlatfileReqType, type FlatfileSecType } from "$lib/api";
+  import { X, Loader2, FileArchive, ListPlus, ArrowRight } from "lucide-svelte";
+  import { app, log, navigate, refreshQueueSnapshot } from "$lib/stores/app.svelte";
+  import {
+    api,
+    WHOLE_MARKET,
+    type EnqueuePlan,
+    type FlatfileReqType,
+    type FlatfileSecType,
+  } from "$lib/api";
 
   type FF = {
     title: string;
@@ -20,67 +29,88 @@
   function close() {
     app.flatfileRunnerOpen = false;
     app.endpointRunner = null;
+    queued = 0;
+    msg = "";
   }
 
   const ff = $derived(
     (app.endpointRunner as unknown as { _flatfile?: FF } | null)?._flatfile ?? null,
   );
+  const kind = $derived(ff ? `flatfile_${ff.sec.toLowerCase()}_${ff.req}` : "");
 
-  let date = $state("");
-  let format = $state<"CSV" | "JSONL">("CSV");
-  let outputPath = $state("");
+  /** The last settled session: yesterday, walked back over a weekend. */
+  function lastSession(): string {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
+    return d.toISOString().slice(0, 10);
+  }
+
+  let start = $state(lastSession());
+  let end = $state(lastSession());
+  let format = $state<"csv" | "jsonl">("csv");
   let busy = $state(false);
   let msg = $state("");
+  let queued = $state(0);
+  let plan = $state<EnqueuePlan | null>(null);
 
+  const ymd = (iso: string) => iso.replace(/-/g, "");
+
+  function args(batch_id?: string) {
+    return {
+      kind,
+      symbol: WHOLE_MARKET,
+      format,
+      start: ymd(start),
+      end: ymd(end),
+      batch_id: batch_id ?? null,
+    };
+  }
+
+  // How many archives the range is, from the same planner that queues.
   $effect(() => {
-    if (!app.flatfileRunnerOpen || !ff) return;
-    // Suggest a sensible default output path under settings.output_dir.
-    if (!outputPath && date && app.settings.output_dir) {
-      outputPath = `${app.settings.output_dir}/_flatfiles/${ff.sec.toLowerCase()}_${ff.req}_${date}.${format.toLowerCase()}`;
+    void [kind, start, end, format];
+    if (!app.flatfileRunnerOpen || !kind || !start || !end || end < start) {
+      plan = null;
+      return;
     }
+    let cancelled = false;
+    const t = setTimeout(() => {
+      api
+        .estimate(args())
+        .then((p) => !cancelled && (plan = p))
+        .catch(() => !cancelled && (plan = null));
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
   });
 
-  $effect(() => {
-    if (!ff || !date || !app.settings.output_dir) return;
-    outputPath = `${app.settings.output_dir}/_flatfiles/${ff.sec.toLowerCase()}_${ff.req}_${date}.${format.toLowerCase()}`;
-  });
-
-  // A flat-file archive lands outside the per-symbol library tree, so
-  // the path in the status line is the only way to find it. Give the
-  // user a way to act on it rather than a string to retype.
-  let writtenPath = $state("");
-  async function reveal() {
+  async function queue() {
+    if (!ff) return;
+    if (end < start) {
+      msg = "The end date is before the start date.";
+      return;
+    }
+    busy = true;
+    msg = "";
     try {
-      await revealItemInDir(writtenPath);
+      queued = await api.enqueue(args(crypto.randomUUID()));
+      await api.runQueue().catch(() => false);
+      await refreshQueueSnapshot();
+      log("info", `Queued ${queued} ${ff.title} archive${queued === 1 ? "" : "s"}`);
     } catch (e: unknown) {
       msg = e instanceof Error ? e.message : String(e);
+      log("error", `Flat file queue failed: ${msg}`);
+    } finally {
+      busy = false;
     }
   }
 
-  async function run() {
-    if (!ff) return;
-    if (!date) { msg = "Date required (YYYYMMDD)."; return; }
-    busy = true;
-    msg = "Downloading…";
-    try {
-      const path = await api.flatfileDownload({
-        sec_type: ff.sec,
-        req_type: ff.req,
-        date,
-        output_path: outputPath,
-        format,
-      });
-      busy = false;
-      msg = `Wrote ${path}`;
-      writtenPath = path;
-      log("info", `Flatfile downloaded`, { sec: ff.sec, req: ff.req, date, path });
-    } catch (e: unknown) {
-      busy = false;
-      writtenPath = "";
-      const m = e instanceof Error ? e.message : String(e);
-      msg = m;
-      log("error", `Flatfile failed: ${m}`);
-    }
+  function viewDownloads() {
+    close();
+    navigate("queue");
   }
 </script>
 
@@ -91,7 +121,7 @@
          onkeydown={(e) => e.key === "Escape" && close()}>
       <header class="head">
         <div>
-          <span class="text-caption">Flatfile · bulk-day pull</span>
+          <span class="text-caption">Flat file · whole market, one archive per day</span>
           <h2 class="title"><FileArchive size={18} /> {ff.title}</h2>
           <p class="sub fg-muted">{ff.desc}</p>
         </div>
@@ -99,46 +129,54 @@
       </header>
 
       <div class="form">
-        <label class="field">
-          <span class="text-caption">Trading day</span>
-          <input class="field-input text-figures" bind:value={date} placeholder="YYYYMMDD" />
-        </label>
         <div class="row">
           <label class="field">
-            <span class="text-caption">Format</span>
-            <select class="field-input" bind:value={format}>
-              <option value="CSV">CSV</option>
-              <option value="JSONL">JSON Lines</option>
-            </select>
+            <span class="text-caption">From</span>
+            <input class="field-input text-figures" type="date" bind:value={start} />
           </label>
-          <div class="field" aria-hidden="true"></div>
+          <label class="field">
+            <span class="text-caption">To</span>
+            <input class="field-input text-figures" type="date" bind:value={end} />
+          </label>
         </div>
         <label class="field">
-          <span class="text-caption">Output path</span>
-          <input class="field-input text-figures" bind:value={outputPath} />
+          <span class="text-caption">Format</span>
+          <select class="field-input" bind:value={format}>
+            <option value="csv">CSV</option>
+            <option value="jsonl">JSON Lines</option>
+          </select>
         </label>
+        <p class="hint fg-muted">
+          {#if plan}
+            {plan.requests.toLocaleString()} trading day{plan.requests === 1 ? "" : "s"} —
+            one archive each, saved under <code>{kind}</code> in your library.
+          {:else}
+            Each trading day is one archive, often several gigabytes.
+          {/if}
+        </p>
       </div>
 
       <footer class="foot">
-        <span class="msg" class:error={msg.toLowerCase().includes("required") || msg.toLowerCase().includes("failed")}>
-          {msg}
-        </span>
-        {#if writtenPath}
-          <button class="btn btn-ghost" onclick={reveal}>
-            <FolderOpen size={14} />Show file
+        <span class="msg" class:error={!!msg}>{msg}</span>
+        {#if queued > 0}
+          <button class="btn btn-primary" onclick={viewDownloads}>
+            Queued {queued} — view downloads <ArrowRight size={14} />
+          </button>
+        {:else}
+          <button class="btn btn-primary" onclick={queue} disabled={busy || !start || !end}>
+            {#if busy}<Loader2 class="spin" size={14} />Queueing…
+            {:else}<ListPlus size={14} />Queue {plan ? plan.requests.toLocaleString() : ""} archive{plan?.requests === 1 ? "" : "s"}
+            {/if}
           </button>
         {/if}
-        <button class="btn btn-primary" onclick={run} disabled={busy || !date}>
-          {#if busy}<Loader2 class="spin" size={14} />Downloading…
-          {:else}<Play size={14} fill="currentColor" />Download
-          {/if}
-        </button>
       </footer>
     </div>
   </div>
 {/if}
 
 <style>
+  .head .text-caption { display: block; margin-bottom: 4px; }
+  .hint { font-size: var(--text-body-sm); margin: 0; }
   .backdrop {
     position: fixed; inset: 0;
     background: var(--scrim);

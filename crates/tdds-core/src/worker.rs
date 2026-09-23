@@ -16,7 +16,7 @@ use tokio::sync::{mpsc, Mutex};
 
 use crate::client::Client;
 use crate::coverage::dataset_path;
-use crate::format::write_batch;
+use crate::format::{write_batch, OutputFormat};
 use crate::progress::{Progress, ProgressEvent};
 use crate::queue::{Queue, Task};
 use crate::tier::UserTiers;
@@ -371,6 +371,9 @@ fn classify(msg: &str) -> FailureKind {
         || m.contains("invalidargument")
         || m.contains("permissiondenied")
         || m.contains("cannot specify")
+        // A key-only sign-in cannot open the flat-file server; retrying
+        // on the same credentials fails identically.
+        || m.contains("flatfiles unavailable: market-data auth rejected")
     {
         FailureKind::BadRequest
     } else {
@@ -452,6 +455,38 @@ async fn run_one(client: &Client, task: &Task) -> crate::Result<Outcome> {
         return Ok(Outcome::AlreadyOnDisk { bytes });
     }
 
+    // A flat file is one archive for the whole market and one day,
+    // fetched straight to disk by its own request rather than through
+    // the registry dispatcher. The service writes CSV or JSONL; the
+    // planner refuses anything else before a task is queued.
+    if let Some((sec, req)) = task.spec.kind.flatfile() {
+        let fmt = match task.format {
+            OutputFormat::Csv => thetadatadx::flatfiles::FlatFileFormat::Csv,
+            OutputFormat::Jsonl => thetadatadx::flatfiles::FlatFileFormat::Jsonl,
+            other => {
+                return Err(crate::Error::Other(format!(
+                    "flat files are delivered as CSV or JSONL, not {}",
+                    other.extension()
+                )))
+            }
+        };
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        client
+            .raw()
+            .flatfile_request(sec, req, &task.spec.ymd(), &path, fmt)
+            .await?;
+        let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        // Rows are not counted: an archive runs to gigabytes, and
+        // reading it back to count lines would double the work.
+        return Ok(if bytes == 0 {
+            Outcome::NoData
+        } else {
+            Outcome::Written { rows: 0, bytes }
+        });
+    }
+
     // One dispatch path for every kind: `DataSpec` lowers onto the same
     // registry spec the endpoint browser uses, so argument validation,
     // wire coercion, and Arrow column projection are identical whichever
@@ -487,6 +522,7 @@ mod pool_tests {
             r#"Server(Grpc { kind: InvalidArgument, message: "Too many days" })"#,
             "Error parsing expiration Cannot specify '*' for the date",
             r#"Server(Grpc { kind: PermissionDenied, message: "tier" })"#,
+            "thetadatadx: FLATFILES unavailable: market-data auth rejected (RemoveReason ord=1)",
         ] {
             assert_eq!(classify(msg), FailureKind::BadRequest, "{msg}");
         }

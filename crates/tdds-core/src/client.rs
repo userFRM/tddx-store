@@ -61,9 +61,18 @@ impl Client {
     }
 
     /// Connect with an API key issued from the ThetaData account portal.
-    pub async fn connect_with_api_key(api_key: &str) -> crate::Result<Self> {
+    ///
+    /// `email` is optional for market data and required for flat files.
+    /// Market data authenticates on the key alone; the flat-file server
+    /// takes the account email in the same login frame and rejects an
+    /// empty one as `InvalidLoginValues`. A key-only sign-in therefore
+    /// downloads everything except flat files.
+    pub async fn connect_with_api_key(api_key: &str, email: Option<&str>) -> crate::Result<Self> {
         Self::install_crypto();
-        let creds = Credentials::api_key(api_key);
+        let creds = match email.map(str::trim).filter(|e| !e.is_empty()) {
+            Some(email) => Credentials::api_key_with_email(email, api_key),
+            None => Credentials::api_key(api_key),
+        };
         Self::connect_with(creds).await
     }
 

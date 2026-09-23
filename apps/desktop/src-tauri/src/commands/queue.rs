@@ -85,8 +85,29 @@ async fn plan(
     // `start_date`/`end_date` and answers the whole window in one call
     // — fanning *that* out produced N tasks each missing the arguments
     // the endpoint requires, so every one of them failed.
-    let takes_single_date = thetadatadx::find(kind.endpoint())
-        .is_some_and(|m| m.params.iter().any(|p| p.name == "date"));
+    let takes_single_date = kind.is_flatfile()
+        || thetadatadx::find(kind.endpoint())
+            .is_some_and(|m| m.params.iter().any(|p| p.name == "date"));
+
+    // A flat file is one archive per trading day and comes only as CSV
+    // or JSONL. Refuse the rest here, where the user can still change
+    // it, rather than queue tasks that each fail the same way.
+    if kind.is_flatfile() {
+        let fmt = args.format.to_ascii_lowercase();
+        if fmt != "csv" && fmt != "jsonl" {
+            return Err(format!(
+                "Flat files are delivered as CSV or JSON Lines, not {}.",
+                args.format
+            ));
+        }
+    }
+    // The trading calendar comes from a symbol's listed dates. A flat
+    // file has no symbol of its own, so the broad market stands in.
+    let calendar_symbol = if kind.is_flatfile() {
+        "SPY"
+    } else {
+        args.symbol.as_str()
+    };
 
     let units: Vec<Unit> = match (&args.date, &args.start, &args.end) {
         (Some(d), _, _) => vec![(parse_ymd(d)?, None)],
@@ -96,7 +117,7 @@ async fn plan(
             if takes_single_date {
                 client_of(state)
                     .await?
-                    .trading_days(&args.symbol, s, e)
+                    .trading_days(calendar_symbol, s, e)
                     .await
                     .map_err(|e| e.to_string())?
                     .into_iter()

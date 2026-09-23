@@ -64,7 +64,7 @@ export type Settings = {
  *  blank password" is not representable on either side. */
 export type LoginArgs =
   | { method: "password"; email: string; password: string }
-  | { method: "api_key"; api_key: string };
+  | { method: "api_key"; api_key: string; email?: string | null };
 
 export type Counts = [string, number][];
 
@@ -272,7 +272,6 @@ export const api = {
     invoke<IntervalOption[]>("interval_options", { kind: kind ?? null }),
   endpointInvoke: (args: InvokeArgs) => invoke<number>("endpoint_invoke", { args }),
   listQuery: (args: ListQueryArgs) => invoke<string[]>("list_query", { args }),
-  flatfileDownload: (args: FlatfileArgs) => invoke<string>("flatfile_download", { args }),
   flatfileDatasets: () => invoke<FlatfileDataset[]>("flatfile_datasets"),
   /** The exact trading days absent from a set's span, `YYYY-MM-DD`.
    *  Read-only; the count matches what `requeueMissingDates` would act
@@ -527,15 +526,13 @@ export type FlatfileReqType = "trade_quote" | "open_interest" | "eod";
 export type FlatfileDataset = {
   sec_type: FlatfileSecType;
   req_type: FlatfileReqType;
+  /** The dataset kind that queues it, e.g. `flatfile_option_trade_quote`. */
+  kind: string;
 };
 
-export type FlatfileArgs = {
-  sec_type: FlatfileSecType;
-  req_type: FlatfileReqType;
-  date: string;
-  output_path: string;
-  format: "CSV" | "JSONL";
-};
+/** A whole-market flat file has no symbol; this is what it is filed under. */
+export const WHOLE_MARKET = "ALL";
+
 
 export type IndexPresetView = {
   id: string;

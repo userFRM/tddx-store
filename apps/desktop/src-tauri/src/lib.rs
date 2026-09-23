@@ -96,7 +96,6 @@ pub fn run() {
             endpoints::list_query,
             endpoints::dataset_catalogue,
             endpoints::interval_options,
-            flatfiles::flatfile_download,
             flatfiles::flatfile_datasets,
             index_presets::index_presets,
             index_presets::index_constituents,

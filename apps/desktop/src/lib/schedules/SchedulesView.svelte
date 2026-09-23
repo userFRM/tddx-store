@@ -15,7 +15,7 @@
     CalendarClock,
     Loader2,
   } from "lucide-svelte";
-  import { api, TAURI_AVAILABLE, type ScheduleRow } from "$lib/api";
+  import { api, TAURI_AVAILABLE, WHOLE_MARKET, type FlatfileDataset, type ScheduleRow } from "$lib/api";
   import { app, log } from "$lib/stores/app.svelte";
 
   let rows = $state<ScheduleRow[]>([]);
@@ -39,6 +39,16 @@
     return order.map((category) => ({ category, entries: map.get(category)! }));
   });
 
+  // Whole-market flat files are datasets too: one archive per trading
+  // day, the most natural nightly job there is.
+  let flatfiles = $state<FlatfileDataset[]>([]);
+  const flatfileKinds = $derived(new Set(flatfiles.map((f) => f.kind)));
+  function flatfileLabel(f: FlatfileDataset): string {
+    const sec = f.sec_type.charAt(0) + f.sec_type.slice(1).toLowerCase();
+    const req = f.req_type.replace(/_/g, " ");
+    return `${sec} ${req}`;
+  }
+
   let composer = $state({
     name: "",
     kind: "stock_history_trade_quote",
@@ -48,6 +58,16 @@
     at_time: "17:30",
   });
   let msg = $state("");
+
+  const isFlatfile = $derived(flatfileKinds.has(composer.kind));
+
+  // A flat file has no symbol and comes only as CSV or JSON Lines;
+  // correct the form rather than let it submit something that cannot
+  // download.
+  $effect(() => {
+    if (!isFlatfile) return;
+    if (composer.format !== "csv" && composer.format !== "jsonl") composer.format = "csv";
+  });
 
   let timer: ReturnType<typeof setInterval> | null = null;
 
@@ -64,19 +84,21 @@
   }
   onMount(() => {
     refresh();
+    api.flatfileDatasets().then((f) => (flatfiles = f)).catch(() => {});
     timer = setInterval(refresh, 10_000);
   });
   onDestroy(() => timer && clearInterval(timer));
 
   async function create() {
-    if (!composer.name || !composer.symbol) {
-      msg = "Name and symbol required";
+    const symbol = isFlatfile ? WHOLE_MARKET : composer.symbol.trim().toUpperCase();
+    if (!composer.name || !symbol) {
+      msg = isFlatfile ? "Give the schedule a name" : "Name and symbol required";
       return;
     }
     creating = true;
     msg = "Creating…";
     try {
-      const s = await api.scheduleCreate(composer);
+      const s = await api.scheduleCreate({ ...composer, symbol });
       rows = [s, ...rows];
       log("info", `Created schedule ${s.name}`, { id: s.id, cron: s.cron_kind });
       composer = { ...composer, name: "", symbol: "" };
@@ -125,13 +147,8 @@
       close rather than scheduling on the boundary.
     </p>
     <p class="sub fg-subtle">
-      Whole-market flat-file archives are not schedulable yet — those
-      download outside the queue. Track it in
-      <a
-        href="https://github.com/userFRM/tddx-store/issues/3"
-        target="_blank"
-        rel="noreferrer">issue #3</a
-      >.
+      Pick a flat file to keep the whole market current — one archive per
+      trading day, no symbol needed.
     </p>
   </header>
 
@@ -143,11 +160,22 @@
       </label>
       <label class="field">
         <span class="text-caption">Symbol</span>
-        <input class="field-input text-figures" bind:value={composer.symbol} placeholder="QQQ" />
+        {#if isFlatfile}
+          <input class="field-input" value="Whole market" disabled />
+        {:else}
+          <input class="field-input text-figures" bind:value={composer.symbol} placeholder="QQQ" />
+        {/if}
       </label>
       <label class="field">
         <span class="text-caption">Dataset</span>
         <select class="field-input" bind:value={composer.kind}>
+          {#if flatfiles.length}
+            <optgroup label="Flat files · whole market">
+              {#each flatfiles as f (f.kind)}
+                <option value={f.kind}>{flatfileLabel(f)}</option>
+              {/each}
+            </optgroup>
+          {/if}
           {#each datasetGroups as group (group.category)}
             <optgroup label={group.category}>
               {#each group.entries as entry (entry.name)}
@@ -162,10 +190,10 @@
       <label class="field">
         <span class="text-caption">Format</span>
         <select class="field-input" bind:value={composer.format}>
-          <option value="parquet">Parquet</option>
+          {#if !isFlatfile}<option value="parquet">Parquet</option>{/if}
           <option value="csv">CSV</option>
           <option value="jsonl">JSON Lines</option>
-          <option value="json">JSON</option>
+          {#if !isFlatfile}<option value="json">JSON</option>{/if}
         </select>
       </label>
       <label class="field">

@@ -12,6 +12,10 @@
  */
 const KNOWN: { test: RegExp; say: string }[] = [
   {
+    test: /flatfiles unavailable: market-data auth rejected/i,
+    say: "Flat files need your account email — sign in again with it alongside your API key",
+  },
+  {
     test: /invalid session|unauthenticated/i,
     say: "Signed out — another app signed in to this ThetaData account",
   },
