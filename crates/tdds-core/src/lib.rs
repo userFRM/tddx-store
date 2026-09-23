@@ -29,7 +29,7 @@ pub use coverage::Coverage;
 pub use format::OutputFormat;
 pub use preview::{preview as preview_parquet, PreviewField, PreviewResult};
 pub use progress::{Progress, ProgressEvent};
-pub use queue::{Queue, Task, TaskStatus};
+pub use queue::{Batch, Queue, Task, TaskStatus};
 pub use registry::{
     all_endpoints, dispatch_raw, dispatch_to_arrow, dispatch_to_file, endpoints_by_category,
     find_endpoint, EndpointInfo, ParamInfo,

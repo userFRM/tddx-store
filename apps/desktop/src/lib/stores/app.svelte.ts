@@ -18,6 +18,7 @@ import {
   TIER_RANK,
   DEFAULT_PREFERENCES,
   type CatalogueEntry,
+  type Batch,
   type Coverage,
   type EndpointInfo,
   type QueueSnapshot,
@@ -167,6 +168,18 @@ interface AppState {
    *  one place. */
   coverage: Coverage[];
   coverageLoading: boolean;
+  /** Downloads as the user asked for them, newest first. */
+  batches: Batch[];
+  /** Measured transfer rate. See `recordTransfer`. */
+  transfer: TransferStats;
+}
+
+/** What the downloads pane and transfers view show about speed. */
+export interface TransferStats {
+  /** Bytes per second over the recent window. */
+  bytesPerSec: number;
+  /** One point per second for the sparkline, oldest first. */
+  history: number[];
 }
 
 export interface EndpointRunnerState {
@@ -245,6 +258,8 @@ export const app = $state<AppState>({
   browseIntent: null,
   coverage: [],
   coverageLoading: false,
+  batches: [],
+  transfer: { bytesPerSec: 0, history: [] },
 });
 
 // ── Theme ─────────────────────────────────────────────────────
@@ -478,6 +493,7 @@ export async function startProgressListener() {
       } else if (ev.type === "done" || ev.type === "empty" || ev.type === "failed") {
         app.runningTaskIds = app.runningTaskIds.filter((id) => id !== ev.task_id);
       }
+      if (ev.type === "done") recordTransfer(ev.bytes);
       // Trigger an immediate poll so the UI snapshot picks up the new
       // SQLite state without waiting for the next tick.
       void _pollOnce();
@@ -681,6 +697,51 @@ function _busy(snap: QueueSnapshot | null): boolean {
   );
 }
 
+
+// ── Transfer rate ────────────────────────────────────────────
+//
+// Measured from what finished, not from the size of the output tree.
+// The old estimate diffed `bytes_on_disk`, which the backend refreshes
+// at most every 15 s because it costs a walk of the whole directory, so
+// the rate read zero between refreshes and spiked when one landed.
+//
+// Bytes are credited when a task completes, which is the only moment
+// the server's transfer is known; a window long enough to span several
+// completions smooths that into a rate someone can read.
+const RATE_WINDOW_MS = 10_000;
+const HISTORY_POINTS = 60;
+const _completions: { t: number; bytes: number }[] = [];
+let _rateTimer: ReturnType<typeof setInterval> | null = null;
+
+function recordTransfer(bytes: number) {
+  if (bytes > 0) _completions.push({ t: Date.now(), bytes });
+  _ensureRateTimer();
+}
+
+function _ensureRateTimer() {
+  if (_rateTimer !== null) return;
+  _rateTimer = setInterval(_sampleRate, 1000);
+}
+
+function _sampleRate() {
+  const now = Date.now();
+  while (_completions.length && now - _completions[0].t > RATE_WINDOW_MS) {
+    _completions.shift();
+  }
+  const bytes = _completions.reduce((s, c) => s + c.bytes, 0);
+  const rate = bytes / (RATE_WINDOW_MS / 1000);
+  const history = [...app.transfer.history, rate].slice(-HISTORY_POINTS);
+  app.transfer = { bytesPerSec: rate, history };
+
+  // Stop ticking once nothing is moving and the chart has flattened, so
+  // an idle app does no periodic work.
+  const idle = !_busy(app.queueSnap);
+  if (idle && _completions.length === 0 && history.every((v) => v === 0)) {
+    clearInterval(_rateTimer!);
+    _rateTimer = null;
+  }
+}
+
 /** Counts at the moment the queue last went from idle to busy, so the
  *  completion notice can report the run rather than the lifetime
  *  totals of the database. */
@@ -688,6 +749,10 @@ let _runBaseline: Record<string, number> | null = null;
 
 async function _pollOnce() {
   try {
+    void api
+      .batches()
+      .then((b) => (app.batches = b))
+      .catch(() => {});
     const snap = await api.snapshot();
     const finishedBefore = _finishedCount(app.queueSnap);
     const wasBusy = _busy(app.queueSnap);

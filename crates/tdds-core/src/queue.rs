@@ -22,6 +22,9 @@ pub enum TaskStatus {
     Done,
     Failed,
     Empty,
+    /// Held by the user. Not claimable, not terminal: resuming puts it
+    /// back to `Pending` exactly as it was.
+    Paused,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,7 +41,54 @@ pub struct Task {
     pub finished_at: Option<i64>,
     pub rows: Option<i64>,
     pub bytes: Option<i64>,
+    /// The download this task belongs to — one per request the user
+    /// made, however many tasks the app split it into. `None` for rows
+    /// written before batches existed.
+    pub batch_id: Option<String>,
 }
+
+/// One download as the user asked for it: every task sharing a batch
+/// id, rolled up. This is the unit a torrent client would show — "SPY ·
+/// End of Day · 2023 → 2026" — however many tasks the app split it into.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct Batch {
+    pub id: String,
+    pub kind: String,
+    /// Distinct symbols in the batch, and the first one for the label.
+    pub symbols: i64,
+    pub first_symbol: String,
+    /// The span covered, `YYYYMMDD`.
+    pub start: String,
+    pub end: String,
+    pub format: String,
+    pub total: i64,
+    pub pending: i64,
+    pub running: i64,
+    pub paused: i64,
+    pub done: i64,
+    pub empty: i64,
+    pub failed: i64,
+    /// Failed tasks that were re-queued as narrower windows. Their work
+    /// lives on in their halves, so they count toward neither progress
+    /// nor failure.
+    pub split: i64,
+    pub rows: i64,
+    pub bytes: i64,
+    pub created_at: i64,
+    /// When the first task was picked up. A download can wait in line
+    /// or sit paused before it starts; a speed measured from
+    /// `created_at` would count that waiting as slowness.
+    pub started_at: Option<i64>,
+    pub finished_at: Option<i64>,
+    /// Mean wall-clock seconds per finished task. The basis for a
+    /// batch's ETA: far steadier than a global tasks-per-second, because
+    /// it is measured on this dataset at this size.
+    pub avg_task_secs: Option<f64>,
+}
+
+/// Marks a failed row whose window was re-queued as two halves. Shared
+/// with the worker so the two cannot drift.
+pub const SPLIT_MARKER: &str = "re-queued as";
 
 #[derive(Clone)]
 pub struct Queue {
@@ -89,6 +139,7 @@ impl Queue {
                 bytes       INTEGER,
                 transforms_json   TEXT,
                 extra_json        TEXT,
+                batch_id          TEXT,
                 claimed_by        TEXT,
                 claimed_at        INTEGER,
                 last_heartbeat_at INTEGER
@@ -104,6 +155,7 @@ impl Queue {
             .await?;
         Self::add_column_if_missing(pool, "ALTER TABLE tasks ADD COLUMN extra_json TEXT").await?;
         Self::add_column_if_missing(pool, "ALTER TABLE tasks ADD COLUMN end_date TEXT").await?;
+        Self::add_column_if_missing(pool, "ALTER TABLE tasks ADD COLUMN batch_id TEXT").await?;
         Self::add_column_if_missing(pool, "ALTER TABLE tasks ADD COLUMN claimed_by TEXT").await?;
         Self::add_column_if_missing(pool, "ALTER TABLE tasks ADD COLUMN claimed_at INTEGER")
             .await?;
@@ -123,6 +175,9 @@ impl Queue {
         )
         .execute(pool)
         .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS tasks_batch ON tasks(batch_id)")
+            .execute(pool)
+            .await?;
 
         Ok(())
     }
@@ -149,6 +204,21 @@ impl Queue {
         output_dir: &str,
         priority: i32,
     ) -> crate::Result<String> {
+        self.enqueue_in_batch(spec, format, output_dir, priority, None)
+            .await
+    }
+
+    /// Enqueue as part of a batch: the download the user asked for, which
+    /// the app may have split into many tasks. Tasks sharing a batch id
+    /// are reported, paused and removed together.
+    pub async fn enqueue_in_batch(
+        &self,
+        spec: DataSpec,
+        format: OutputFormat,
+        output_dir: &str,
+        priority: i32,
+        batch_id: Option<&str>,
+    ) -> crate::Result<String> {
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().timestamp();
         let transforms_json = if spec.transforms.is_noop() {
@@ -164,8 +234,8 @@ impl Queue {
         sqlx::query(
             r#"INSERT INTO tasks (id, kind, symbol, date, end_date, interval, expiration, strike,
                 right_, format, output_dir, status, priority, attempts, created_at,
-                transforms_json, extra_json)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)"#,
+                transforms_json, extra_json, batch_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?)"#,
         )
         .bind(&id)
         .bind(spec.kind.as_str())
@@ -183,6 +253,7 @@ impl Queue {
         .bind(now)
         .bind(transforms_json)
         .bind(extra_json)
+        .bind(batch_id)
         .execute(&self.pool)
         .await?;
         Ok(id)
@@ -244,7 +315,7 @@ impl Queue {
             Some(s) => sqlx::query_as(
                 "SELECT * FROM tasks WHERE status=? ORDER BY priority DESC, created_at ASC LIMIT ?",
             )
-            .bind(status_to_str(s))
+            .bind(TaskStatus::as_str(s))
             .bind(limit)
             .fetch_all(&self.pool)
             .await?,
@@ -526,17 +597,85 @@ impl Queue {
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }
-}
 
-fn status_to_str(s: TaskStatus) -> &'static str {
-    match s {
-        TaskStatus::Pending => "pending",
-        TaskStatus::Running => "running",
-        TaskStatus::Done => "done",
-        TaskStatus::Failed => "failed",
-        TaskStatus::Empty => "empty",
+    /// The most recent batches, newest first.
+    pub async fn batches(&self, limit: i64) -> crate::Result<Vec<Batch>> {
+        let marker = format!("%{SPLIT_MARKER}%");
+        let rows = sqlx::query_as::<_, Batch>(
+            r#"SELECT batch_id                                   AS id,
+                      MIN(kind)                                  AS kind,
+                      COUNT(DISTINCT symbol)                     AS symbols,
+                      MIN(symbol)                                AS first_symbol,
+                      MIN(date)                                  AS start,
+                      MAX(COALESCE(end_date, date))              AS "end",
+                      MIN(format)                                AS format,
+                      COUNT(*)                                   AS total,
+                      SUM(status = 'pending')                    AS pending,
+                      SUM(status = 'running')                    AS running,
+                      SUM(status = 'paused')                     AS paused,
+                      SUM(status = 'done')                       AS done,
+                      SUM(status = 'empty')                      AS empty,
+                      SUM(status = 'failed' AND COALESCE(error, '') NOT LIKE ?1) AS failed,
+                      SUM(status = 'failed' AND COALESCE(error, '') LIKE ?1)     AS split,
+                      COALESCE(SUM(rows), 0)                     AS rows,
+                      COALESCE(SUM(bytes), 0)                    AS bytes,
+                      MIN(created_at)                            AS created_at,
+                      MIN(claimed_at)                            AS started_at,
+                      MAX(finished_at)                           AS finished_at,
+                      AVG(CASE WHEN status IN ('done', 'empty')
+                                AND claimed_at IS NOT NULL
+                                AND finished_at IS NOT NULL
+                               THEN CAST(finished_at - claimed_at AS REAL) END) AS avg_task_secs
+                 FROM tasks
+                WHERE batch_id IS NOT NULL
+                GROUP BY batch_id
+                ORDER BY MIN(created_at) DESC
+                LIMIT ?2"#,
+        )
+        .bind(marker)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Hold every task in a batch that has not started. Running tasks
+    /// finish the request already in flight — the server is doing that
+    /// work either way — so a pause takes effect task by task, the way
+    /// a torrent client's does.
+    pub async fn pause_batch(&self, batch_id: &str) -> crate::Result<u64> {
+        let res = sqlx::query(
+            "UPDATE tasks SET status = 'paused' WHERE batch_id = ? AND status = 'pending'",
+        )
+        .bind(batch_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
+    /// Put a paused batch back in line exactly as it was.
+    pub async fn resume_batch(&self, batch_id: &str) -> crate::Result<u64> {
+        let res = sqlx::query(
+            "UPDATE tasks SET status = 'pending' WHERE batch_id = ? AND status = 'paused'",
+        )
+        .bind(batch_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
+    /// Remove a batch's rows. A task mid-request finishes into a row
+    /// that no longer exists, which the worker already treats as
+    /// cancelled.
+    pub async fn remove_batch(&self, batch_id: &str) -> crate::Result<u64> {
+        let res = sqlx::query("DELETE FROM tasks WHERE batch_id = ?")
+            .bind(batch_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected())
     }
 }
+
 impl TaskStatus {
     /// The string this status is stored and transported as.
     pub fn as_str(self) -> &'static str {
@@ -546,6 +685,7 @@ impl TaskStatus {
             TaskStatus::Done => "done",
             TaskStatus::Failed => "failed",
             TaskStatus::Empty => "empty",
+            TaskStatus::Paused => "paused",
         }
     }
 
@@ -556,6 +696,7 @@ impl TaskStatus {
             "done" => TaskStatus::Done,
             "failed" => TaskStatus::Failed,
             "empty" => TaskStatus::Empty,
+            "paused" => TaskStatus::Paused,
             _ => return None,
         })
     }
@@ -601,6 +742,8 @@ struct TaskRow {
     /// written before it read back as single-day.
     #[sqlx(default)]
     end_date: Option<String>,
+    #[sqlx(default)]
+    batch_id: Option<String>,
 }
 
 impl TryFrom<TaskRow> for Task {
@@ -649,6 +792,7 @@ impl TryFrom<TaskRow> for Task {
             finished_at: r.finished_at,
             rows: r.rows,
             bytes: r.bytes,
+            batch_id: r.batch_id,
         })
     }
 }
@@ -710,6 +854,115 @@ mod tests {
         };
         assert!(ok, "the claimed row should have accepted its outcome");
         task.id
+    }
+
+    /// Enqueue `n` tasks in one batch, on distinct dates so none of them
+    /// collide on disk.
+    async fn enqueue_batch(queue: &Queue, batch: &str, n: usize) -> Vec<String> {
+        let mut ids = Vec::with_capacity(n);
+        for i in 0..n {
+            let mut spec = sample_spec();
+            spec.date += chrono::Duration::days(i as i64);
+            ids.push(
+                queue
+                    .enqueue_in_batch(spec, OutputFormat::Parquet, "/tmp/out", 0, Some(batch))
+                    .await
+                    .unwrap(),
+            );
+        }
+        ids
+    }
+
+    #[tokio::test]
+    async fn a_batch_rolls_up_its_tasks() {
+        let queue = single_connection_memory_queue("owner").await;
+        enqueue_batch(&queue, "b1", 4).await;
+        finish_next(&queue, TaskStatus::Done).await;
+        finish_next(&queue, TaskStatus::Empty).await;
+
+        let batches = queue.batches(10).await.unwrap();
+        assert_eq!(batches.len(), 1);
+        let b = &batches[0];
+        assert_eq!(b.id, "b1");
+        assert_eq!(b.total, 4);
+        assert_eq!((b.done, b.empty, b.pending), (1, 1, 2));
+        assert_eq!(b.first_symbol, "AAPL");
+        assert_eq!(b.start, "20240102");
+        assert_eq!(b.end, "20240105", "the span runs to the last task's day");
+    }
+
+    /// Unbatched rows — everything written before batches existed —
+    /// must not appear as one enormous nameless download.
+    #[tokio::test]
+    async fn rows_without_a_batch_are_not_a_batch() {
+        let queue = single_connection_memory_queue("owner").await;
+        enqueue_n(&queue, 3).await;
+        assert!(queue.batches(10).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_paused_batch_is_not_claimed_and_resumes_intact() {
+        let queue = single_connection_memory_queue("owner").await;
+        enqueue_batch(&queue, "b1", 3).await;
+
+        assert_eq!(queue.pause_batch("b1").await.unwrap(), 3);
+        assert!(
+            queue.claim_next().await.unwrap().is_none(),
+            "a paused task must not be handed to a worker"
+        );
+
+        assert_eq!(queue.resume_batch("b1").await.unwrap(), 3);
+        assert!(queue.claim_next().await.unwrap().is_some());
+    }
+
+    /// Pausing one download leaves every other one running.
+    #[tokio::test]
+    async fn pausing_is_scoped_to_its_batch() {
+        let queue = single_connection_memory_queue("owner").await;
+        enqueue_batch(&queue, "held", 2).await;
+        enqueue_batch(&queue, "live", 1).await;
+
+        queue.pause_batch("held").await.unwrap();
+        let claimed = queue
+            .claim_next()
+            .await
+            .unwrap()
+            .expect("the live batch is claimable");
+        assert_eq!(claimed.batch_id.as_deref(), Some("live"));
+    }
+
+    #[tokio::test]
+    async fn removing_a_batch_removes_only_its_rows() {
+        let queue = single_connection_memory_queue("owner").await;
+        enqueue_batch(&queue, "gone", 3).await;
+        enqueue_batch(&queue, "kept", 2).await;
+
+        assert_eq!(queue.remove_batch("gone").await.unwrap(), 3);
+        let left = queue.batches(10).await.unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].id, "kept");
+    }
+
+    /// A failed task that was split lives on in its halves, so it is
+    /// neither a failure nor unfinished work.
+    #[tokio::test]
+    async fn a_split_parent_is_not_counted_as_a_failure() {
+        let queue = single_connection_memory_queue("owner").await;
+        enqueue_batch(&queue, "b1", 2).await;
+        let t = queue.claim_next().await.unwrap().unwrap();
+        queue
+            .mark_failed(
+                &t.id,
+                &format!("timeout ({SPLIT_MARKER} 2 narrower windows)"),
+            )
+            .await
+            .unwrap();
+        let t = queue.claim_next().await.unwrap().unwrap();
+        queue.mark_failed(&t.id, "real failure").await.unwrap();
+
+        let b = &queue.batches(10).await.unwrap()[0];
+        assert_eq!(b.split, 1);
+        assert_eq!(b.failed, 1, "only the genuine failure counts");
     }
 
     #[tokio::test]

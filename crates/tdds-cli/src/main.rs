@@ -286,22 +286,9 @@ fn parse_ymd(s: &str) -> anyhow::Result<NaiveDate> {
 }
 
 fn parse_status(s: &str) -> Option<TaskStatus> {
-    Some(match s {
-        "pending" => TaskStatus::Pending,
-        "running" => TaskStatus::Running,
-        "done" => TaskStatus::Done,
-        "failed" => TaskStatus::Failed,
-        "empty" => TaskStatus::Empty,
-        _ => return None,
-    })
+    TaskStatus::parse(s)
 }
 
 fn fmt_status(s: TaskStatus) -> &'static str {
-    match s {
-        TaskStatus::Pending => "pending",
-        TaskStatus::Running => "running",
-        TaskStatus::Done => "done",
-        TaskStatus::Failed => "failed",
-        TaskStatus::Empty => "empty",
-    }
+    s.as_str()
 }

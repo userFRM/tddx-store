@@ -6,7 +6,6 @@
    * no pending, no failed); collapsible to a thin summary strip via the
    * header chevron when the user wants the screen real estate back.
    */
-  import { onDestroy } from "svelte";
   import {
     Play,
     Pause,
@@ -23,30 +22,27 @@
   import { app, log, refreshQueueSnapshot } from "$lib/stores/app.svelte";
   import { api, fmtBytes, fmtNum, type TaskView } from "$lib/api";
 
-  // ── Throughput estimator (rolling, from successive snapshots) ─────
-  let prevBytes = $state(0);
-  let prevDone = $state(0);
-  let prevTs = $state(0);
-  let bytesPerSec = $state(0);
-  let tasksPerSec = $state(0);
+  // ── Throughput ───────────────────────────────────────────────
+  // Measured from completed transfers in the store (`app.transfer`),
+  // not diffed from `bytes_on_disk`: that figure is refreshed at most
+  // every 15 s because it costs a walk of the output tree, so the old
+  // rate read 0 B/s between refreshes and spiked when one landed.
+  const bytesPerSec = $derived(app.transfer.bytesPerSec);
 
-  $effect(() => {
-    const s = app.queueSnap;
-    if (!s) return;
-    const now = performance.now();
-    const dt = (now - prevTs) / 1000;
-    if (prevTs > 0 && dt >= 0.5) {
-      const dBytes = s.bytes_on_disk - prevBytes;
-      const dDone =
-        (s.counts.find(([k]) => k === "done")?.[1] ?? 0) - prevDone;
-      // EMA smoothing so the number doesn't jitter
-      const alpha = 0.4;
-      bytesPerSec = bytesPerSec * (1 - alpha) + Math.max(0, dBytes / dt) * alpha;
-      tasksPerSec = tasksPerSec * (1 - alpha) + Math.max(0, dDone / dt) * alpha;
-    }
-    prevBytes = s.bytes_on_disk;
-    prevDone = s.counts.find(([k]) => k === "done")?.[1] ?? 0;
-    prevTs = now;
+  /** Sparkline path for the last minute of transfer rate. */
+  const sparkPath = $derived.by(() => {
+    const h = app.transfer.history;
+    if (h.length < 2) return "";
+    const max = Math.max(...h, 1);
+    const w = 100;
+    const ht = 24;
+    return h
+      .map((v, i) => {
+        const x = (i / (h.length - 1)) * w;
+        const y = ht - (v / max) * ht;
+        return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+      })
+      .join(" ");
   });
 
   const running = $derived<TaskView[]>(
@@ -66,10 +62,31 @@
   const doneN   = $derived(counts.find(([k]) => k === "done")?.[1]    ?? 0);
   const failed  = $derived(counts.find(([k]) => k === "failed")?.[1]  ?? 0);
 
+  /** Total measured work left, spread across the workers available.
+   *  Each batch contributes remaining tasks × its own mean task time,
+   *  so a slow dataset and a fast one are each estimated on their own
+   *  pace rather than blended into one global rate. */
+  const workers = $derived(
+    Math.max(
+      1,
+      Math.min(
+        app.tierStatus?.in_flight_budget ?? 1,
+        app.settings.preferences?.max_concurrency ?? Number.POSITIVE_INFINITY,
+      ),
+    ),
+  );
   const etaSec = $derived(() => {
-    const inflight = pending + running.length;
-    if (inflight === 0 || tasksPerSec <= 0) return null;
-    return inflight / tasksPerSec;
+    let work = 0;
+    let remainingTasks = 0;
+    for (const b of app.batches) {
+      const remaining = b.pending + b.running;
+      if (remaining === 0) continue;
+      if (!b.avg_task_secs) return null; // not enough measured yet
+      work += remaining * b.avg_task_secs;
+      remainingTasks += remaining;
+    }
+    if (remainingTasks === 0) return null;
+    return work / Math.max(1, Math.min(workers, remainingTasks));
   });
 
   function fmtETA(s: number | null): string {
@@ -88,38 +105,7 @@
     return `${(bps / 1024 ** 3).toFixed(2)} GB/s`;
   }
 
-  // Indeterminate fake progress: server doesn't report row-level progress
-  // mid-call, but the UI feels dead without motion. We tween a fraction
-  // toward 95% per running task; on completion the task disappears.
-  let runningFracs = $state<Record<string, number>>({});
-  const TICK_MS = 200;
 
-  let tickTimer: ReturnType<typeof setInterval> | null = null;
-  function startTick() {
-    if (tickTimer !== null) return;
-    tickTimer = setInterval(() => {
-      const next: Record<string, number> = {};
-      for (const r of running) {
-        const cur = runningFracs[r.id] ?? 0.04;
-        // asymptotic creep toward 0.95
-        next[r.id] = cur + (0.95 - cur) * 0.06;
-      }
-      runningFracs = next;
-    }, TICK_MS);
-  }
-  function stopTick() {
-    if (tickTimer !== null) {
-      clearInterval(tickTimer);
-      tickTimer = null;
-    }
-  }
-
-  $effect(() => {
-    if (running.length > 0) startTick();
-    else stopTick();
-  });
-
-  onDestroy(stopTick);
 
   // Both of these can fail for reasons the user can act on — not
   // connected, queue db locked, no failed rows — so the failure has to
@@ -241,6 +227,11 @@
         <span class="summary-label">Throughput</span>
         <span class="summary-value">{fmtRate(bytesPerSec)}</span>
       </div>
+      {#if sparkPath}
+        <svg class="spark" viewBox="0 0 100 24" preserveAspectRatio="none" aria-label="Transfer rate, last minute">
+          <path d={sparkPath} />
+        </svg>
+      {/if}
       <div class="summary-row">
         <span class="summary-label">ETA</span>
         <span class="summary-value">{fmtETA(etaSec())}</span>
@@ -265,15 +256,14 @@
                   <span class="task-kind text-figures">{t.kind}</span>
                 </div>
               </div>
+              <!-- The server reports nothing mid-request, so there is no
+                   true percentage to show for one task. An indeterminate
+                   bar says "working" honestly; an invented number would
+                   teach people to distrust every bar in the app. -->
               <div class="progress-track">
-                <div
-                  class="progress-fill running"
-                  style:width="{(runningFracs[t.id] ?? 0.04) * 100}%"
-                ></div>
+                <div class="progress-fill indeterminate"></div>
               </div>
               <div class="task-meta tabnum">
-                <span class="meta-pct">{Math.round((runningFracs[t.id] ?? 0.04) * 100)}%</span>
-                <span class="sep">·</span>
                 <span class="task-date">{t.date}{t.end_date ? ` → ${t.end_date}` : ""}</span>
                 <span class="sep">·</span>
                 <span>streaming…</span>
@@ -541,6 +531,18 @@
     flex-shrink: 0;
   }
 
+  .spark {
+    width: 100%;
+    height: 24px;
+    display: block;
+    margin: 2px 0 4px;
+  }
+  .spark path {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 1.25;
+    vector-effect: non-scaling-stroke;
+  }
   .task-meta {
     display: flex;
     gap: 6px;
@@ -550,10 +552,6 @@
     text-transform: none;
     letter-spacing: 0;
     font-weight: var(--weight-normal);
-  }
-  .meta-pct {
-    color: var(--accent-hi);
-    font-weight: var(--weight-semi);
   }
   .sep { color: var(--fg-subtle); }
 

@@ -70,7 +70,7 @@ export type Counts = [string, number][];
 
 export type TaskView = {
   id: string;
-  status: "pending" | "running" | "done" | "failed" | "empty";
+  status: "pending" | "running" | "done" | "failed" | "empty" | "paused";
   kind: string;
   symbol: string;
   date: string;
@@ -117,6 +117,35 @@ export type Transforms = {
 /** What a selection becomes once the app has absorbed the server's
  *  constraints — the window cap, the per-day endpoint shape, and the
  *  endpoints that refuse an expiration wildcard. */
+/** One download as the user asked for it, rolled up from its tasks. */
+export type Batch = {
+  id: string;
+  kind: string;
+  symbols: number;
+  first_symbol: string;
+  start: string;
+  end: string;
+  format: string;
+  total: number;
+  pending: number;
+  running: number;
+  paused: number;
+  done: number;
+  empty: number;
+  failed: number;
+  /** Failed tasks re-queued as narrower windows; their work continues
+   *  in their halves, so they count toward neither progress nor failure. */
+  split: number;
+  rows: number;
+  bytes: number;
+  created_at: number;
+  /** First task picked up; null until one has been. */
+  started_at: number | null;
+  finished_at: number | null;
+  /** Mean seconds per finished task, measured on this batch. */
+  avg_task_secs: number | null;
+};
+
 export type EnqueuePlan = {
   requests: number;
   windows: number;
@@ -141,6 +170,9 @@ export type EnqueueArgs = {
    *  param name; keys the endpoint does not declare are dropped when
    *  the task is lowered onto a request, not rejected. */
   extra?: Record<string, string> | null;
+  /** One id for a whole submission, so ten symbols queued together read
+   *  as one download. */
+  batch_id?: string | null;
 };
 
 export type EndpointParam = {
@@ -204,6 +236,10 @@ export const api = {
   /** What `enqueue` would queue, without queueing it. Same code path,
    *  so the number shown is the number that happens. */
   estimate: (args: EnqueueArgs) => invoke<EnqueuePlan>("estimate", { args }),
+  batches: () => invoke<Batch[]>("batches"),
+  pauseBatch: (id: string) => invoke<number>("pause_batch", { id }),
+  resumeBatch: (id: string) => invoke<number>("resume_batch", { id }),
+  removeBatch: (id: string) => invoke<number>("remove_batch", { id }),
   enqueue: (args: EnqueueArgs) => invoke<number>("enqueue", { args }),
   snapshot: () => invoke<QueueSnapshot>("snapshot"),
   coverage: () => invoke<Coverage[]>("coverage_report"),

@@ -181,9 +181,10 @@
     composer.msg = `Queueing ${symbols.length} symbol${symbols.length === 1 ? "" : "s"}…`;
     let totalTasks = 0;
     let firstErr = "";
+    const batchId = crypto.randomUUID();
     for (const symbol of symbols) {
       try {
-        const n = await api.enqueue({ ...baseArgs, symbol } as EnqueueArgs);
+        const n = await api.enqueue({ ...baseArgs, symbol, batch_id: batchId } as EnqueueArgs);
         totalTasks += n;
       } catch (e: unknown) {
         if (!firstErr) firstErr = e instanceof Error ? e.message : String(e);

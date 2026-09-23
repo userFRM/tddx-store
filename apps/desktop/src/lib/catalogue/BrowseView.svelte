@@ -378,9 +378,12 @@
     let totalTasks = 0;
     let firstErr = "";
 
+    // One download, however many symbols: the transfers view shows
+    // what was asked for, not the tasks it became.
+    const batchId = crypto.randomUUID();
     for (const symbol of symbols) {
       try {
-        const args = enqueueArgsFor(symbol);
+        const args = { ...enqueueArgsFor(symbol), batch_id: batchId };
         const n = await api.enqueue(args);
         totalTasks += n;
       } catch (e: unknown) {
@@ -416,11 +419,13 @@
     const twin = suggestion.kind;
     const isOption = twin.startsWith("option_");
     let totalTasks = 0;
+    const batchId = crypto.randomUUID();
     for (const symbol of symbols) {
       try {
         const args: EnqueueArgs = {
           kind: twin,
           symbol,
+          batch_id: batchId,
           format,
           interval: interval || "tick",
           start: start || null,

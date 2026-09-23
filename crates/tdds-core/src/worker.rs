@@ -149,6 +149,9 @@ async fn run_worker(
         // leaving the in-flight task pinned in `running`
         // forever and dropping our concurrency by one.
         use futures::FutureExt;
+        // Measured, not estimated: the transfers view derives speed and
+        // ETA from how long tasks actually take.
+        let started = std::time::Instant::now();
         let res = match std::panic::AssertUnwindSafe(run_one(&client, &task))
             .catch_unwind()
             .await
@@ -194,7 +197,7 @@ async fn run_worker(
                             let _ = tx
                                 .send(ProgressEvent::Empty {
                                     task_id: task.id.clone(),
-                                    millis: 0,
+                                    millis: started.elapsed().as_millis() as u64,
                                 })
                                 .await;
                         }
@@ -214,7 +217,7 @@ async fn run_worker(
                                         task_id: task.id.clone(),
                                         rows: rows as u64,
                                         bytes,
-                                        millis: 0,
+                                        millis: started.elapsed().as_millis() as u64,
                                     })
                                     .await;
                             }
@@ -238,7 +241,10 @@ async fn run_worker(
                 // repeating the ones that do not.
                 if split_failed_windows {
                     if let Some(n) = split_failed_window(&queue, &task, &msg).await {
-                        msg = format!("{msg} (re-queued as {n} narrower windows)");
+                        msg = format!(
+                            "{msg} ({} {n} narrower windows)",
+                            crate::queue::SPLIT_MARKER
+                        );
                     }
                 }
                 match queue.mark_failed(&task.id, &msg).await {
@@ -248,7 +254,7 @@ async fn run_worker(
                                 .send(ProgressEvent::Failed {
                                     task_id: task.id.clone(),
                                     error: msg,
-                                    millis: 0,
+                                    millis: started.elapsed().as_millis() as u64,
                                 })
                                 .await;
                         }
@@ -285,8 +291,15 @@ async fn split_failed_window(queue: &Queue, task: &Task, error: &str) -> Option<
     let (first, second) = task.spec.split_window()?;
     let mut queued = 0;
     for spec in [first, second] {
+        // The halves stay in the download the user asked for.
         match queue
-            .enqueue(spec, task.format, &task.output_dir, task.priority)
+            .enqueue_in_batch(
+                spec,
+                task.format,
+                &task.output_dir,
+                task.priority,
+                task.batch_id.as_deref(),
+            )
             .await
         {
             Ok(_) => queued += 1,

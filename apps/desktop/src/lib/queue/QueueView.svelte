@@ -30,21 +30,27 @@
     ArrowRight,
   } from "lucide-svelte";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
+  import TransfersList from "$lib/queue/TransfersList.svelte";
   import { app, log, navigate, refreshQueueSnapshot } from "$lib/stores/app.svelte";
   import { api, fmtBytes, fmtNum, type TaskView } from "$lib/api";
 
-  type StatusFilter = "all" | "pending" | "running" | "done" | "failed" | "empty";
+  type StatusFilter = "all" | "pending" | "running" | "paused" | "done" | "failed" | "empty";
 
   const STATUS_LABELS: Record<StatusFilter, string> = {
     all: "All",
     pending: "Pending",
     running: "Running",
+    paused: "Paused",
     done: "Done",
     failed: "Failed",
     empty: "Empty",
   };
   const FILTERS = Object.keys(STATUS_LABELS) as StatusFilter[];
 
+  /** Downloads as asked for, or the tasks they were split into. The
+   *  first is what most people want; the second is where to go when
+   *  one of them misbehaves. */
+  let layout = $state<"transfers" | "tasks">("transfers");
   let activeFilter = $state<StatusFilter>("all");
   let query = $state("");
   let selected = $state<Set<string>>(new Set());
@@ -215,7 +221,13 @@
   <!-- Header: what the queue holds, and what to do with all of it -->
   <div class="queue-header">
     <div class="header-left">
-      <h1 class="queue-title">Queue</h1>
+      <div class="title-row">
+        <h1 class="queue-title">Queue</h1>
+        <div class="layout-toggle" role="tablist" aria-label="Queue layout">
+          <button role="tab" aria-selected={layout === "transfers"} class:active={layout === "transfers"} onclick={() => (layout = "transfers")}>Downloads</button>
+          <button role="tab" aria-selected={layout === "tasks"} class:active={layout === "tasks"} onclick={() => (layout = "tasks")}>Tasks</button>
+        </div>
+      </div>
       {#if snap}
         <span class="queue-meta text-figures">
           <span>{plural(totalCount, "task")}</span>
@@ -254,6 +266,11 @@
     </div>
   </div>
 
+  {#if layout === "transfers"}
+    <div class="transfers-body">
+      <TransfersList />
+    </div>
+  {:else}
   <!-- Filter row -->
   <div class="filter-bar">
     <div class="filter-pills" role="group" aria-label="Status filter">
@@ -517,9 +534,34 @@
       {/if}
     {/if}
   </div>
+  {/if}
 </div>
 
 <style>
+  .title-row { display: flex; align-items: center; gap: var(--sp-4); }
+  .layout-toggle {
+    display: inline-flex;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: 2px;
+  }
+  .layout-toggle button {
+    border: none;
+    background: none;
+    padding: 3px 10px;
+    border-radius: calc(var(--r-sm) - 2px);
+    font: inherit;
+    font-size: var(--text-body-sm);
+    color: var(--fg-muted);
+    cursor: pointer;
+  }
+  .layout-toggle button.active {
+    background: var(--surface-1);
+    color: var(--fg);
+    box-shadow: 0 0 0 1px var(--border);
+  }
+  .transfers-body { flex: 1; overflow-y: auto; }
   .queue-view {
     display: flex;
     flex-direction: column;

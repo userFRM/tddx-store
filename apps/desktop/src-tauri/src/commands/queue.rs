@@ -36,6 +36,11 @@ pub struct EnqueueArgs {
     /// endpoint does not declare are ignored downstream.
     #[serde(default)]
     pub extra: Option<std::collections::BTreeMap<String, String>>,
+    /// The download this belongs to. Browse passes one id for a whole
+    /// submission, so ten symbols queued together read as one transfer;
+    /// when absent, each call is its own.
+    #[serde(default)]
+    pub batch_id: Option<String>,
 }
 
 /// One unit of the date axis: a start, and an end when the endpoint
@@ -174,6 +179,10 @@ pub async fn enqueue(state: State<'_, Arc<AppState>>, args: EnqueueArgs) -> Resu
 
     let (plan, units, expirations) = plan(&state, &args).await?;
     let priority = args.priority.unwrap_or(0);
+    let batch_id = args
+        .batch_id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     for (d, end) in &units {
         for expiration in &expirations {
@@ -190,7 +199,7 @@ pub async fn enqueue(state: State<'_, Arc<AppState>>, args: EnqueueArgs) -> Resu
                 extra: args.extra.clone().unwrap_or_default(),
             };
             queue
-                .enqueue(spec, format, &cfg.output_dir, priority)
+                .enqueue_in_batch(spec, format, &cfg.output_dir, priority, Some(&batch_id))
                 .await
                 .map_err(|e| e.to_string())?;
         }
@@ -320,6 +329,46 @@ pub async fn run_queue(
     });
     *handle_guard = Some(h);
     Ok(true)
+}
+
+/// The most recent downloads, each rolled up from its tasks.
+#[tauri::command]
+pub async fn batches(state: State<'_, Arc<AppState>>) -> Result<Vec<tdds_core::Batch>, String> {
+    queue_of(&state)
+        .await?
+        .batches(BATCH_ROWS)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// How many downloads the transfers list shows.
+const BATCH_ROWS: i64 = 200;
+
+#[tauri::command]
+pub async fn pause_batch(state: State<'_, Arc<AppState>>, id: String) -> Result<u64, String> {
+    queue_of(&state)
+        .await?
+        .pause_batch(&id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn resume_batch(state: State<'_, Arc<AppState>>, id: String) -> Result<u64, String> {
+    queue_of(&state)
+        .await?
+        .resume_batch(&id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn remove_batch(state: State<'_, Arc<AppState>>, id: String) -> Result<u64, String> {
+    queue_of(&state)
+        .await?
+        .remove_batch(&id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// True iff a worker pool task is in flight.
