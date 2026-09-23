@@ -272,32 +272,6 @@ fn effective_workers(budget: usize, cap: Option<usize>) -> usize {
     cap.map_or(budget, |c| c.min(budget)).max(1)
 }
 
-#[cfg(test)]
-mod pool_tests {
-    use super::effective_workers;
-
-    #[test]
-    fn no_cap_uses_the_whole_budget() {
-        assert_eq!(effective_workers(8, None), 8);
-    }
-
-    #[test]
-    fn a_cap_below_the_budget_leaves_headroom() {
-        assert_eq!(effective_workers(8, Some(3)), 3);
-    }
-
-    #[test]
-    fn a_cap_above_the_budget_cannot_exceed_the_plan() {
-        assert_eq!(effective_workers(8, Some(64)), 8);
-    }
-
-    #[test]
-    fn there_is_always_at_least_one_worker() {
-        assert_eq!(effective_workers(8, Some(0)), 1);
-        assert_eq!(effective_workers(0, None), 1);
-    }
-}
-
 /// Re-queue a failed windowed task as two halves. Returns how many were
 /// queued, or `None` when splitting does not apply.
 ///
@@ -422,4 +396,30 @@ async fn run_one(client: &Client, task: &Task) -> crate::Result<Outcome> {
     write_batch(&transformed, &path, task.format)?;
     let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
     Ok(Outcome::Written { rows, bytes })
+}
+
+#[cfg(test)]
+mod pool_tests {
+    use super::effective_workers;
+
+    #[test]
+    fn no_cap_uses_the_whole_budget() {
+        assert_eq!(effective_workers(8, None), 8);
+    }
+
+    #[test]
+    fn a_cap_below_the_budget_leaves_headroom() {
+        assert_eq!(effective_workers(8, Some(3)), 3);
+    }
+
+    #[test]
+    fn a_cap_above_the_budget_cannot_exceed_the_plan() {
+        assert_eq!(effective_workers(8, Some(64)), 8);
+    }
+
+    #[test]
+    fn there_is_always_at_least_one_worker() {
+        assert_eq!(effective_workers(8, Some(0)), 1);
+        assert_eq!(effective_workers(0, None), 1);
+    }
 }
