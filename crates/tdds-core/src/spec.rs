@@ -322,6 +322,37 @@ impl DataSpec {
         )
     }
 
+    /// Halve the window this spec covers, for a retry that should not
+    /// repeat work that already succeeded.
+    ///
+    /// A task is no longer "one day for one symbol": a range endpoint is
+    /// a year wide and an option chain can be a year wide per
+    /// expiration. Retrying the whole of that because it failed at 90%
+    /// throws away the 90%. Halving instead turns a doomed retry into a
+    /// binary search that isolates the stretch that actually fails,
+    /// and converges because each half is strictly narrower.
+    ///
+    /// `None` when there is nothing left to split — a single day, or a
+    /// spec with no window at all.
+    pub fn split_window(&self) -> Option<(DataSpec, DataSpec)> {
+        let end = self.end_date?;
+        let days = (end - self.date).num_days();
+        if days < 1 {
+            return None;
+        }
+        let mid = self.date + chrono::Duration::days(days / 2);
+        let next = mid.succ_opt()?;
+        if mid < self.date || next > end {
+            return None;
+        }
+        let mut first = self.clone();
+        first.end_date = Some(mid);
+        let mut second = self.clone();
+        second.date = next;
+        second.end_date = Some(end);
+        Some((first, second))
+    }
+
     /// Lower this work unit onto the generic registry spec, filling only
     /// the parameters the endpoint actually declares.
     ///
@@ -609,6 +640,65 @@ mod tests {
             let k = DataKind::parse(name).expect("known dataset");
             assert!(!k.rejects_expiration_wildcard(), "{name}");
         }
+    }
+
+    #[test]
+    fn a_failed_window_halves_into_two_that_cover_it_exactly() {
+        let mut spec = option_spec();
+        spec.date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+        spec.end_date = NaiveDate::from_ymd_opt(2025, 12, 31);
+
+        let (a, b) = spec.split_window().expect("a year is splittable");
+        assert_eq!(a.date, spec.date, "starts where the original did");
+        assert_eq!(b.end_date, spec.end_date, "ends where the original did");
+        assert_eq!(
+            a.end_date.unwrap().succ_opt().unwrap(),
+            b.date,
+            "contiguous: no day is fetched twice and none is skipped"
+        );
+        assert!(
+            a.end_date.unwrap() < spec.end_date.unwrap(),
+            "strictly narrower"
+        );
+    }
+
+    /// Each half is strictly narrower, so repeated failure converges on
+    /// single days rather than splitting forever.
+    #[test]
+    fn splitting_terminates() {
+        let mut spec = option_spec();
+        spec.date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+        spec.end_date = NaiveDate::from_ymd_opt(2025, 3, 1);
+
+        let mut frontier = vec![spec];
+        let mut singles = 0;
+        for _ in 0..64 {
+            let mut next = Vec::new();
+            for s in frontier.drain(..) {
+                match s.split_window() {
+                    Some((a, b)) => {
+                        next.push(a);
+                        next.push(b);
+                    }
+                    None => singles += 1,
+                }
+            }
+            if next.is_empty() {
+                break;
+            }
+            frontier = next;
+        }
+        assert!(frontier.is_empty(), "splitting never bottomed out");
+        assert_eq!(singles, 60, "every day in Jan 1 – Mar 1 accounted for once");
+    }
+
+    #[test]
+    fn a_single_day_has_nothing_left_to_split() {
+        let mut spec = option_spec();
+        spec.end_date = Some(spec.date);
+        assert!(spec.split_window().is_none());
+        spec.end_date = None;
+        assert!(spec.split_window().is_none());
     }
 
     #[test]

@@ -189,7 +189,17 @@ async fn run_worker(
                 }
             },
             Err(e) => {
-                let msg = e.to_string();
+                let mut msg = e.to_string();
+                // A task can now be a year wide, or a year wide per
+                // expiration. Retrying all of that because it failed
+                // near the end throws away everything that worked, so
+                // re-queue it as two narrower windows instead: each
+                // half is strictly smaller, so repeated failure
+                // converges on the days that actually fail rather than
+                // repeating the ones that do not.
+                if let Some(n) = split_failed_window(&queue, &task, &msg).await {
+                    msg = format!("{msg} (re-queued as {n} narrower windows)");
+                }
                 match queue.mark_failed(&task.id, &msg).await {
                     Ok(true) => {
                         if let Some(tx) = &tx {
@@ -211,6 +221,43 @@ async fn run_worker(
             }
         }
     }
+}
+
+/// Re-queue a failed windowed task as two halves. Returns how many were
+/// queued, or `None` when splitting does not apply.
+///
+/// Deliberately not attempted for a failure the request itself caused:
+/// a malformed argument fails identically at any width, so splitting it
+/// just doubles the number of rows saying the same thing.
+async fn split_failed_window(queue: &Queue, task: &Task, error: &str) -> Option<usize> {
+    if is_request_error(error) {
+        return None;
+    }
+    let (first, second) = task.spec.split_window()?;
+    let mut queued = 0;
+    for spec in [first, second] {
+        match queue
+            .enqueue(spec, task.format, &task.output_dir, task.priority)
+            .await
+        {
+            Ok(_) => queued += 1,
+            Err(e) => {
+                tracing::error!(?e, task_id = %task.id, "could not re-queue split window");
+                return None;
+            }
+        }
+    }
+    Some(queued)
+}
+
+/// Whether the server rejected the shape of the request rather than
+/// failing to deliver it. These are the app's bugs, not transient.
+fn is_request_error(msg: &str) -> bool {
+    let m = msg.to_lowercase();
+    m.contains("missing required arg")
+        || m.contains("unknown endpoint")
+        || m.contains("invalidargument")
+        || m.contains("cannot specify")
 }
 
 struct HeartbeatGuard {
