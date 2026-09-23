@@ -17,7 +17,7 @@ path = "src/main.rs"
 default = ["presets"]
 # `presets` pulls indexkit (S&P 500 / NDX / etc constituent lists). Optional
 # so the desktop app builds without network access to the indexkit repo.
-presets = ["dep:indexkit"]
+presets = ["dep:indexkit", "dep:reqwest"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -27,6 +27,8 @@ toml = "0.8"
 tdds-core = { path = "../../../crates/tdds-core" }
 thetadatadx.workspace = true
 indexkit = { git = "https://github.com/userFRM/indexkit", branch = "main", optional = true }
+# Same version and TLS stack indexkit already links, so no second copy.
+reqwest = { version = "0.13", default-features = false, features = ["rustls"], optional = true }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
