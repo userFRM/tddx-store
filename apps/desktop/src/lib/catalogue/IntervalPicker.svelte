@@ -5,7 +5,6 @@
    * (OHLC, quote ticks). Hidden for pure trade ticks and EOD.
    */
 
-  import { onMount } from "svelte";
   import { api, resolveKindToEndpoint, type IntervalOption } from "$lib/api";
   import { app, log } from "$lib/stores/app.svelte";
 
@@ -23,11 +22,25 @@
   // download time.
   let options = $state<IntervalOption[]>([]);
 
-  onMount(async () => {
-    try {
-      options = await api.intervalOptions();
-    } catch (e) {
-      log("error", `Interval list unavailable: ${e}`);
+  // Reload whenever the dataset changes: the accepted set is per
+  // endpoint, so a list fetched once would offer `tick` on an OHLC
+  // dataset that refuses it.
+  $effect(() => {
+    const kind = kindId;
+    if (!kind) return;
+    api
+      .intervalOptions(kind)
+      .then((v) => (options = v))
+      .catch((e) => log("error", `Interval list unavailable: ${e}`));
+  });
+
+  // If the dataset dropped the currently-selected interval, fall back
+  // to the finest one it does accept rather than sending a value the
+  // server will reject.
+  $effect(() => {
+    if (options.length === 0) return;
+    if (!options.some((o) => o.id === interval)) {
+      interval = options[0].id;
     }
   });
 

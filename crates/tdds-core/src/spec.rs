@@ -72,6 +72,24 @@ impl DataKind {
         self.takes_param("interval")
     }
 
+    /// Whether this endpoint insists on one concrete expiration and
+    /// refuses the `*` wildcard. See [`REJECTS_EXPIRATION_WILDCARD`].
+    pub fn rejects_expiration_wildcard(&self) -> bool {
+        REJECTS_EXPIRATION_WILDCARD.contains(&self.endpoint())
+    }
+
+    /// The interval values this endpoint will actually serve. `tick`
+    /// is not a granularity an aggregated bar can produce, and the
+    /// server says so rather than falling back to the finest bar.
+    pub fn intervals(&self) -> Vec<IntervalOption> {
+        let rejects_tick = REJECTS_TICK_INTERVAL.contains(&self.endpoint());
+        INTERVALS
+            .iter()
+            .filter(|i| !(rejects_tick && i.id == "tick"))
+            .copied()
+            .collect()
+    }
+
     pub fn is_option(&self) -> bool {
         matches!(self.asset_class(), crate::tier::AssetClass::Option)
     }
@@ -154,6 +172,34 @@ fn default_strike() -> String {
 fn default_right() -> String {
     "both".into()
 }
+
+/// Endpoints that reject `expiration=*` and insist on one concrete
+/// expiration per request.
+///
+/// This is server behaviour, not something the registry declares: the
+/// same wildcard that `option_history_trade` accepts happily comes back
+/// from these as "Error parsing expiration Cannot specify '*' for the
+/// date". Determined by asking the server — see
+/// `examples/probe_limits2.rs`. The app resolves real expirations and
+/// fans out rather than passing the wildcard through and failing.
+pub const REJECTS_EXPIRATION_WILDCARD: &[&str] = &[
+    "option_history_greeks_all",
+    "option_history_greeks_first_order",
+    "option_history_greeks_implied_volatility",
+    "option_history_greeks_second_order",
+    "option_history_greeks_third_order",
+    "option_history_ohlc",
+    "option_list_dates",
+    "option_list_strikes",
+    "option_snapshot_trade",
+];
+
+/// Endpoints that reject `interval=tick`.
+///
+/// An OHLC bar is an aggregate, so "no aggregation" is not a granularity
+/// it can serve; the server says "Interval must be positive". Offering
+/// the value anyway is offering a download that cannot succeed.
+pub const REJECTS_TICK_INTERVAL: &[&str] = &["index_history_ohlc", "stock_history_ohlc"];
 
 /// The widest window the range endpoints accept. Asking for more is
 /// rejected server-side with "Too many days between start and end date;
@@ -497,6 +543,74 @@ mod tests {
     /// without the arguments the registry marks required, and failed
     /// with "missing required arg 'start_date'" — 100% of the time,
     /// for every symbol and every window.
+    /// Both lists name endpoints by string, so a rename upstream would
+    /// turn them into silent no-ops and the constraint they encode
+    /// would come back as a failed download.
+    #[test]
+    fn the_server_quirk_lists_name_real_endpoints() {
+        for name in REJECTS_EXPIRATION_WILDCARD
+            .iter()
+            .chain(REJECTS_TICK_INTERVAL)
+        {
+            assert!(
+                thetadatadx::find(name).is_some(),
+                "`{name}` is not an endpoint the registry knows"
+            );
+        }
+    }
+
+    /// Every endpoint that refuses the wildcard must actually take an
+    /// expiration, or the fan-out has nothing to fan out over.
+    #[test]
+    fn wildcard_refusers_all_take_an_expiration() {
+        for name in REJECTS_EXPIRATION_WILDCARD {
+            let meta = thetadatadx::find(name).expect("registry knows it");
+            assert!(
+                meta.params.iter().any(|p| p.name == "expiration"),
+                "`{name}` refuses `expiration=*` but declares no expiration"
+            );
+        }
+    }
+
+    #[test]
+    fn ohlc_datasets_do_not_offer_tick() {
+        let ohlc = DataKind::parse("stock_history_ohlc").expect("known dataset");
+        assert!(
+            !ohlc.intervals().iter().any(|i| i.id == "tick"),
+            "an aggregated bar cannot serve `tick`, and the server says so"
+        );
+        // Everything else it does serve is still on offer.
+        assert_eq!(ohlc.intervals().len(), INTERVALS.len() - 1);
+    }
+
+    #[test]
+    fn a_tick_capable_dataset_keeps_the_whole_list() {
+        let quote = DataKind::parse("stock_history_quote").expect("known dataset");
+        assert_eq!(quote.intervals().len(), INTERVALS.len());
+    }
+
+    #[test]
+    fn the_greeks_series_needs_a_concrete_expiration() {
+        for name in [
+            "option_history_greeks_all",
+            "option_history_greeks_implied_volatility",
+            "option_history_ohlc",
+        ] {
+            let k = DataKind::parse(name).expect("known dataset");
+            assert!(k.rejects_expiration_wildcard(), "{name}");
+        }
+        // The ones that do accept it must not be dragged into the
+        // fan-out, which would multiply their task count for nothing.
+        for name in [
+            "option_history_trade",
+            "option_history_quote",
+            "option_history_eod",
+        ] {
+            let k = DataKind::parse(name).expect("known dataset");
+            assert!(!k.rejects_expiration_wildcard(), "{name}");
+        }
+    }
+
     #[test]
     fn a_window_inside_the_limit_stays_one_task() {
         let a = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();

@@ -18,12 +18,20 @@ pub async fn endpoints_list() -> Result<Vec<EndpointInfo>, String> {
     Ok(all_endpoints())
 }
 
-/// The sampling intervals the interval-taking endpoints accept, in
-/// ascending order. The picker renders this rather than carrying its
-/// own list, so it can never offer a value the endpoint rejects.
+/// The sampling intervals one endpoint accepts, in ascending order.
+///
+/// Per endpoint rather than global, because the set is not the same for
+/// all of them: an OHLC bar is an aggregate, so `tick` is not a
+/// granularity it can serve and the server refuses it outright
+/// ("Interval must be positive"). Without `kind` the caller gets the
+/// full list, which is right for a generic picker and wrong for a
+/// picker attached to a dataset.
 #[tauri::command]
-pub fn interval_options() -> Vec<IntervalOption> {
-    INTERVALS.to_vec()
+pub fn interval_options(kind: Option<String>) -> Vec<IntervalOption> {
+    match kind.as_deref().and_then(tdds_core::DataKind::parse) {
+        Some(k) => k.intervals(),
+        None => INTERVALS.to_vec(),
+    }
 }
 
 #[derive(Deserialize)]

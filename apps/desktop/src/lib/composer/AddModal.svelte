@@ -76,11 +76,24 @@
         request_type,
         symbol: composer.symbol.trim().toUpperCase(),
       };
-      // `option_list_dates` declares expiration as required; without it
-      // the dispatcher rejects the call before it reaches the wire, and
-      // the empty catch below turned that into a silently empty date
-      // list for every option dataset. `*` is the documented wildcard.
-      if (isOption) args.expiration = "*";
+      // `option_list_dates` declares expiration as required and then
+      // refuses the `*` wildcard the docs describe — "Cannot specify
+      // '*' for the date". So resolve a real one first and ask about
+      // that contract; the nearest live expiration is the one whose
+      // dates best represent the chain.
+      if (isOption) {
+        const exps = await api.listQuery({
+          endpoint: "option_list_expirations",
+          args: { symbol: args.symbol },
+        });
+        const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+        const nearest = exps.find((e) => e.replace(/-/g, "") >= today) ?? exps[exps.length - 1];
+        if (!nearest) {
+          availableDates = [];
+          return;
+        }
+        args.expiration = nearest.replace(/-/g, "");
+      }
       const list = await api.listQuery({ endpoint, args });
       availableDates = list;
     } catch (e: unknown) {

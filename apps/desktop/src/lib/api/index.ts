@@ -188,7 +188,10 @@ export const api = {
   duckdbCommand: (output_dir: string) =>
     invoke<{ sql: string; path: string; hint: string }>("duckdb_command", { output_dir }),
   endpointsList: () => invoke<EndpointInfo[]>("endpoints_list"),
-  intervalOptions: () => invoke<IntervalOption[]>("interval_options"),
+  /** Intervals this dataset accepts. Omitting the kind returns them all,
+   *  which is only correct for a picker not attached to a dataset. */
+  intervalOptions: (kind?: string) =>
+    invoke<IntervalOption[]>("interval_options", { kind: kind ?? null }),
   endpointInvoke: (args: InvokeArgs) => invoke<number>("endpoint_invoke", { args }),
   listQuery: (args: ListQueryArgs) => invoke<string[]>("list_query", { args }),
   flatfileDownload: (args: FlatfileArgs) => invoke<string>("flatfile_download", { args }),
