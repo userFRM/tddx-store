@@ -37,6 +37,10 @@
   let email = $state("");
   let password = $state("");
   let apiKey = $state("");
+  /** Optional with a key. Market data needs only the key; the flat-file
+   *  server also wants the account email, and rejects a key-only
+   *  sign-in. */
+  let keyEmail = $state("");
   let remember = $state(true);
   let showSecret = $state(false);
   let signingIn = $state(false);
@@ -54,6 +58,7 @@
     if (stored?.apiKey) {
       method = "api_key";
       apiKey = stored.apiKey;
+      keyEmail = stored.email ?? "";
       remember = true;
       await trySignIn(/* fromAuto */ true);
     } else if (stored?.email && stored.password) {
@@ -88,7 +93,7 @@
         await api.settingsSet(app.settings);
         await api.login({ method: "password", email, password });
       } else {
-        await api.login({ method: "api_key", api_key: apiKey });
+        await api.login({ method: "api_key", api_key: apiKey, email: keyEmail.trim() || null });
       }
       app.connState = "connected";
       app.connMsg = method === "password" ? `Signed in as ${email}` : "Signed in with API key";
@@ -103,7 +108,10 @@
       refreshTierStatus();
 
       // Persist (encrypted) on opt-in, without blocking the UI on it.
-      const credential = method === "password" ? { email, password } : { apiKey };
+      const credential =
+        method === "password"
+          ? { email, password }
+          : { apiKey, email: keyEmail.trim() || undefined };
       void (remember
         ? vault.save(credential).catch((e) => log("warn", `vault save failed: ${e}`))
         : vault.clear().catch(() => {}));
@@ -228,6 +236,21 @@
               Generate one in the ThetaData account portal. Setting
               <code>THETADATA_API_KEY</code> in the environment signs you in
               without typing it here.
+            </span>
+          </label>
+          <label class="field-stack">
+            <span class="text-caption">Account email <span class="fg-subtle">· optional</span></span>
+            <input
+              class="field-input"
+              type="email"
+              autocomplete="email"
+              placeholder="you@example.com"
+              bind:value={keyEmail}
+              disabled={signingIn}
+            />
+            <span class="field-hint text-body-sm fg-muted">
+              Needed only for whole-market flat files — their server wants the
+              email alongside the key. Everything else works without it.
             </span>
           </label>
         {/if}

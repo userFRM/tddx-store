@@ -7,11 +7,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::NaiveDate;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::{Emitter, State};
 use tdds_core::{
-    coverage, format::OutputFormat, queue::TaskStatus, DataKind, DataSpec, Pool, ProgressEvent,
-    Queue,
+    coverage, format::OutputFormat, queue::TaskStatus, DataKind, DataSpec, Pool, PoolOptions,
+    ProgressEvent, Queue,
 };
 
 use crate::state::{parse_ymd, AppState, DiskUsage, QueueSnapshot, TaskView};
@@ -36,40 +36,88 @@ pub struct EnqueueArgs {
     /// endpoint does not declare are ignored downstream.
     #[serde(default)]
     pub extra: Option<std::collections::BTreeMap<String, String>>,
+    /// The download this belongs to. Browse passes one id for a whole
+    /// submission, so ten symbols queued together read as one transfer;
+    /// when absent, each call is its own.
+    #[serde(default)]
+    pub batch_id: Option<String>,
 }
 
-#[tauri::command]
-pub async fn enqueue(state: State<'_, Arc<AppState>>, args: EnqueueArgs) -> Result<usize, String> {
-    let cfg = state.settings.read().await.clone();
-    let queue_guard = state.queue.read().await;
-    let queue = queue_guard
-        .as_ref()
-        .ok_or("queue not opened — connect first")?
-        .clone();
-    drop(queue_guard);
+/// One unit of the date axis: a start, and an end when the endpoint
+/// takes a window rather than a single session.
+type Unit = (NaiveDate, Option<NaiveDate>);
+
+/// What a selection becomes once the app has absorbed the server's
+/// constraints.
+///
+/// Every multiplier here is a constraint being hidden: the 365-day
+/// window cap, the per-day shape of endpoints that take a single
+/// `date`, and the nine endpoints that refuse `expiration=*`. All of it
+/// is correct, and all of it used to be invisible until the queue
+/// filled up — someone asking for greeks on a liquid name over three
+/// years is committing to several hundred requests with no warning.
+#[derive(Debug, Clone, Serialize)]
+pub struct EnqueuePlan {
+    /// One request per entry. This is what the user is committing to.
+    pub requests: usize,
+    /// Trading days for a per-day endpoint, window chunks for a range
+    /// one.
+    pub windows: usize,
+    /// How many expirations it fans out over; 1 unless the endpoint
+    /// refuses the wildcard.
+    pub expirations: usize,
+}
+
+/// Work out what `args` becomes, without queueing any of it.
+///
+/// [`enqueue`] and [`estimate`] both go through this, so the number the
+/// user is shown is the number that gets queued rather than a second
+/// calculation free to drift from it.
+async fn plan(
+    state: &AppState,
+    args: &EnqueueArgs,
+) -> Result<(EnqueuePlan, Vec<Unit>, Vec<String>), String> {
     let kind = DataKind::parse(&args.kind).ok_or_else(|| format!("unknown kind {}", args.kind))?;
-    let format = OutputFormat::parse(&args.format)
-        .ok_or_else(|| format!("unknown format {}", args.format))?;
+
     // Endpoints come in two shapes and the queue has to respect the
     // difference. One declares `date` and answers a single session, so
     // a window becomes one task per trading day. The other declares
     // `start_date`/`end_date` and answers the whole window in one call
     // — fanning *that* out produced N tasks each missing the arguments
     // the endpoint requires, so every one of them failed.
-    let takes_single_date = thetadatadx::find(kind.endpoint())
-        .is_some_and(|m| m.params.iter().any(|p| p.name == "date"));
+    let takes_single_date = kind.is_flatfile()
+        || thetadatadx::find(kind.endpoint())
+            .is_some_and(|m| m.params.iter().any(|p| p.name == "date"));
 
-    let units: Vec<(NaiveDate, Option<NaiveDate>)> = match (&args.date, &args.start, &args.end) {
+    // A flat file is one archive per trading day and comes only as CSV
+    // or JSONL. Refuse the rest here, where the user can still change
+    // it, rather than queue tasks that each fail the same way.
+    if kind.is_flatfile() {
+        let fmt = args.format.to_ascii_lowercase();
+        if fmt != "csv" && fmt != "jsonl" {
+            return Err(format!(
+                "Flat files are delivered as CSV or JSON Lines, not {}.",
+                args.format
+            ));
+        }
+    }
+    // The trading calendar comes from a symbol's listed dates. A flat
+    // file has no symbol of its own, so the broad market stands in.
+    let calendar_symbol = if kind.is_flatfile() {
+        "SPY"
+    } else {
+        args.symbol.as_str()
+    };
+
+    let units: Vec<Unit> = match (&args.date, &args.start, &args.end) {
         (Some(d), _, _) => vec![(parse_ymd(d)?, None)],
         (None, Some(s), Some(e)) => {
             let s = parse_ymd(s)?;
             let e = parse_ymd(e)?;
             if takes_single_date {
-                let client_guard = state.client.read().await;
-                let client = client_guard.as_ref().ok_or("client not connected")?.clone();
-                drop(client_guard);
-                client
-                    .trading_days(&args.symbol, s, e)
+                client_of(state)
+                    .await?
+                    .trading_days(calendar_symbol, s, e)
                     .await
                     .map_err(|e| e.to_string())?
                     .into_iter()
@@ -87,42 +135,76 @@ pub async fn enqueue(state: State<'_, Arc<AppState>>, args: EnqueueArgs) -> Resu
         }
         _ => return Err("pass date or start+end".into()),
     };
+
     // Several option endpoints refuse `expiration=*` outright — the
     // greeks series, option OHLC, and the two option list endpoints —
     // so a task carrying the wildcard could only ever fail. Resolve the
-    // real expirations and fan out over them. Only the ones that were
-    // still live during the requested window are worth asking for; an
-    // expiration that had already passed has nothing to report.
-    let requested_expiration = args.expiration.clone().unwrap_or_else(|| "*".into());
-    let expirations: Vec<String> =
-        if kind.rejects_expiration_wildcard() && is_wildcard(&requested_expiration) {
-            let client_guard = state.client.read().await;
-            let client = client_guard.as_ref().ok_or("client not connected")?.clone();
-            drop(client_guard);
-            let window_start = units.iter().map(|(d, _)| *d).min();
-            let all = client
-                .option_expirations(&args.symbol)
-                .await
-                .map_err(|e| e.to_string())?;
-            let live: Vec<String> = all
-                .into_iter()
-                .filter(|e| window_start.is_none_or(|start| *e >= start))
-                .map(|e| e.format("%Y%m%d").to_string())
-                .collect();
-            if live.is_empty() {
-                return Err(format!(
+    // real expirations and fan out over them. Only the ones still live
+    // during the requested window are worth asking for; an expiration
+    // that had already passed has nothing to report.
+    let requested = args.expiration.clone().unwrap_or_else(|| "*".into());
+    let expirations: Vec<String> = if kind.rejects_expiration_wildcard() && is_wildcard(&requested)
+    {
+        let window_start = units.iter().map(|(d, _)| *d).min();
+        let live: Vec<String> = client_of(state)
+            .await?
+            .option_expirations(&args.symbol)
+            .await
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .filter(|e| window_start.is_none_or(|start| *e >= start))
+            .map(|e| e.format("%Y%m%d").to_string())
+            .collect();
+        if live.is_empty() {
+            return Err(format!(
                 "{} needs a specific expiration and {} has none on or after the requested window",
                 kind.as_str(),
                 args.symbol
             ));
-            }
-            live
-        } else {
-            vec![requested_expiration]
-        };
+        }
+        live
+    } else {
+        vec![requested]
+    };
 
+    let plan = EnqueuePlan {
+        requests: units.len() * expirations.len(),
+        windows: units.len(),
+        expirations: expirations.len(),
+    };
+    Ok((plan, units, expirations))
+}
+
+/// What this selection would cost, in requests. Queues nothing.
+#[tauri::command]
+pub async fn estimate(
+    state: State<'_, Arc<AppState>>,
+    args: EnqueueArgs,
+) -> Result<EnqueuePlan, String> {
+    let (plan, _, _) = plan(&state, &args).await?;
+    Ok(plan)
+}
+
+#[tauri::command]
+pub async fn enqueue(state: State<'_, Arc<AppState>>, args: EnqueueArgs) -> Result<usize, String> {
+    let cfg = state.settings.read().await.clone();
+    let queue_guard = state.queue.read().await;
+    let queue = queue_guard
+        .as_ref()
+        .ok_or("queue not opened — connect first")?
+        .clone();
+    drop(queue_guard);
+    let format = OutputFormat::parse(&args.format)
+        .ok_or_else(|| format!("unknown format {}", args.format))?;
+    let kind = DataKind::parse(&args.kind).ok_or_else(|| format!("unknown kind {}", args.kind))?;
+
+    let (plan, units, expirations) = plan(&state, &args).await?;
     let priority = args.priority.unwrap_or(0);
-    let mut queued = 0usize;
+    let batch_id = args
+        .batch_id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
     for (d, end) in &units {
         for expiration in &expirations {
             let spec = DataSpec {
@@ -138,13 +220,18 @@ pub async fn enqueue(state: State<'_, Arc<AppState>>, args: EnqueueArgs) -> Resu
                 extra: args.extra.clone().unwrap_or_default(),
             };
             queue
-                .enqueue(spec, format, &cfg.output_dir, priority)
+                .enqueue_in_batch(spec, format, &cfg.output_dir, priority, Some(&batch_id))
                 .await
                 .map_err(|e| e.to_string())?;
-            queued += 1;
         }
     }
-    Ok(queued)
+    Ok(plan.requests)
+}
+
+/// The live client, or the message the UI shows when there is none.
+async fn client_of(state: &AppState) -> Result<tdds_core::Client, String> {
+    let guard = state.client.read().await;
+    Ok(guard.as_ref().ok_or("client not connected")?.clone())
 }
 
 /// `*` is the app's own default for "every expiration"; an empty field
@@ -174,7 +261,7 @@ async fn disk_usage(state: &AppState, output_dir: &str) -> Result<DiskUsage, Str
     let cov = coverage::scan(&PathBuf::from(output_dir)).map_err(|e| e.to_string())?;
     let usage = DiskUsage {
         bytes: cov.iter().map(|c| c.bytes).sum(),
-        files: cov.iter().map(|c| c.dates.len()).sum(),
+        files: cov.iter().map(|c| c.files).sum(),
     };
     *state.disk_usage.lock().await = Some((std::time::Instant::now(), usage));
     Ok(usage)
@@ -245,8 +332,15 @@ pub async fn run_queue(
             }
         }
     });
+    let prefs = state.settings.read().await.preferences.clone();
+    let options = PoolOptions {
+        max_concurrency: prefs.max_concurrency,
+        split_failed_windows: prefs.split_failed_windows,
+    };
     let h = tokio::spawn(async move {
-        let pool = Pool::new(client, queue, tiers).with_events(tx);
+        let pool = Pool::new(client, queue, tiers)
+            .with_options(options)
+            .with_events(tx);
         // A pool error means the queue itself is unreachable; individual
         // task failures are recorded on their rows and never surface
         // here. Log it rather than dropping it on the floor.
@@ -256,6 +350,46 @@ pub async fn run_queue(
     });
     *handle_guard = Some(h);
     Ok(true)
+}
+
+/// The most recent downloads, each rolled up from its tasks.
+#[tauri::command]
+pub async fn batches(state: State<'_, Arc<AppState>>) -> Result<Vec<tdds_core::Batch>, String> {
+    queue_of(&state)
+        .await?
+        .batches(BATCH_ROWS)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// How many downloads the transfers list shows.
+const BATCH_ROWS: i64 = 200;
+
+#[tauri::command]
+pub async fn pause_batch(state: State<'_, Arc<AppState>>, id: String) -> Result<u64, String> {
+    queue_of(&state)
+        .await?
+        .pause_batch(&id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn resume_batch(state: State<'_, Arc<AppState>>, id: String) -> Result<u64, String> {
+    queue_of(&state)
+        .await?
+        .resume_batch(&id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn remove_batch(state: State<'_, Arc<AppState>>, id: String) -> Result<u64, String> {
+    queue_of(&state)
+        .await?
+        .remove_batch(&id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// True iff a worker pool task is in flight.

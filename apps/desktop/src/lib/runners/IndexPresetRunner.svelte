@@ -58,11 +58,13 @@
     msg = `Queueing ${eligible.length} symbols…`;
     let total = 0;
     let firstErr = "";
+    const batchId = crypto.randomUUID();
     for (const symbol of eligible) {
       try {
         const n = await api.enqueue({
           kind,
           symbol,
+          batch_id: batchId,
           format,
           start: start || null,
           end: end || null,

@@ -35,11 +35,62 @@ const LEGACY_ALIASES: &[(&str, &str)] = &[
     ("option_oi", "option_history_open_interest"),
 ];
 
+/// Flat files are datasets too: the whole market for one day, in one
+/// archive. Naming each served pair as a dataset kind lets it travel
+/// through the same queue as everything else — visible, pausable,
+/// retryable, schedulable, on disk where the Library looks — instead of
+/// a side channel that wrote a file and forgot it.
+const FLATFILE_PREFIX: &str = "flatfile_";
+
+/// The symbol a whole-market flat file is filed under. It has no single
+/// symbol, and the on-disk layout and coverage both key on one.
+pub const WHOLE_MARKET: &str = "ALL";
+
+/// `flatfile_option_trade_quote`, from the pair the service serves.
+pub fn flatfile_kind_name(
+    sec: thetadatadx::flatfiles::SecType,
+    req: thetadatadx::flatfiles::ReqType,
+) -> String {
+    format!(
+        "{FLATFILE_PREFIX}{}_{}",
+        sec.to_string().to_lowercase(),
+        req.as_str()
+    )
+}
+
+/// Every flat-file dataset the service serves, as kinds. Derived from
+/// the SDK's `SERVED_DATASETS` so the app can never offer a pair the
+/// service rejects.
+pub fn flatfile_kinds() -> Vec<DataKind> {
+    thetadatadx::flatfiles::SERVED_DATASETS
+        .iter()
+        .map(|&(sec, req)| DataKind(flatfile_kind_name(sec, req)))
+        .collect()
+}
+
+fn flatfile_target(
+    name: &str,
+) -> Option<(
+    thetadatadx::flatfiles::SecType,
+    thetadatadx::flatfiles::ReqType,
+)> {
+    if !name.starts_with(FLATFILE_PREFIX) {
+        return None;
+    }
+    thetadatadx::flatfiles::SERVED_DATASETS
+        .iter()
+        .copied()
+        .find(|&(sec, req)| flatfile_kind_name(sec, req) == name)
+}
+
 impl DataKind {
     /// Resolve a dataset name against the registry. Legacy names are
-    /// translated first; anything the registry does not know returns
-    /// `None`.
+    /// translated first; a served flat file resolves too; anything else
+    /// returns `None`.
     pub fn parse(s: &str) -> Option<Self> {
+        if flatfile_target(s).is_some() {
+            return Some(Self(s.to_string()));
+        }
         let name = LEGACY_ALIASES
             .iter()
             .find(|(legacy, _)| *legacy == s)
@@ -94,9 +145,31 @@ impl DataKind {
         matches!(self.asset_class(), crate::tier::AssetClass::Option)
     }
 
+    /// The flat-file pair this kind downloads, or `None` for a
+    /// market-data endpoint.
+    pub fn flatfile(
+        &self,
+    ) -> Option<(
+        thetadatadx::flatfiles::SecType,
+        thetadatadx::flatfiles::ReqType,
+    )> {
+        flatfile_target(&self.0)
+    }
+
+    pub fn is_flatfile(&self) -> bool {
+        self.flatfile().is_some()
+    }
+
     /// Which asset class gates this dataset, from the registry
     /// category. Drives tier gating, not concurrency.
     pub fn asset_class(&self) -> crate::tier::AssetClass {
+        if let Some((sec, _)) = self.flatfile() {
+            return match sec {
+                thetadatadx::flatfiles::SecType::Option => crate::tier::AssetClass::Option,
+                thetadatadx::flatfiles::SecType::Index => crate::tier::AssetClass::Index,
+                _ => crate::tier::AssetClass::Stock,
+            };
+        }
         match self.meta().map(|m| m.category).unwrap_or("") {
             "option" => crate::tier::AssetClass::Option,
             "index" => crate::tier::AssetClass::Index,
@@ -320,6 +393,37 @@ impl DataSpec {
             middle,
             self.ymd()
         )
+    }
+
+    /// Halve the window this spec covers, for a retry that should not
+    /// repeat work that already succeeded.
+    ///
+    /// A task is no longer "one day for one symbol": a range endpoint is
+    /// a year wide and an option chain can be a year wide per
+    /// expiration. Retrying the whole of that because it failed at 90%
+    /// throws away the 90%. Halving instead turns a doomed retry into a
+    /// binary search that isolates the stretch that actually fails,
+    /// and converges because each half is strictly narrower.
+    ///
+    /// `None` when there is nothing left to split — a single day, or a
+    /// spec with no window at all.
+    pub fn split_window(&self) -> Option<(DataSpec, DataSpec)> {
+        let end = self.end_date?;
+        let days = (end - self.date).num_days();
+        if days < 1 {
+            return None;
+        }
+        let mid = self.date + chrono::Duration::days(days / 2);
+        let next = mid.succ_opt()?;
+        if mid < self.date || next > end {
+            return None;
+        }
+        let mut first = self.clone();
+        first.end_date = Some(mid);
+        let mut second = self.clone();
+        second.date = next;
+        second.end_date = Some(end);
+        Some((first, second))
     }
 
     /// Lower this work unit onto the generic registry spec, filling only
@@ -609,6 +713,104 @@ mod tests {
             let k = DataKind::parse(name).expect("known dataset");
             assert!(!k.rejects_expiration_wildcard(), "{name}");
         }
+    }
+
+    #[test]
+    fn a_failed_window_halves_into_two_that_cover_it_exactly() {
+        let mut spec = option_spec();
+        spec.date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+        spec.end_date = NaiveDate::from_ymd_opt(2025, 12, 31);
+
+        let (a, b) = spec.split_window().expect("a year is splittable");
+        assert_eq!(a.date, spec.date, "starts where the original did");
+        assert_eq!(b.end_date, spec.end_date, "ends where the original did");
+        assert_eq!(
+            a.end_date.unwrap().succ_opt().unwrap(),
+            b.date,
+            "contiguous: no day is fetched twice and none is skipped"
+        );
+        assert!(
+            a.end_date.unwrap() < spec.end_date.unwrap(),
+            "strictly narrower"
+        );
+    }
+
+    /// Each half is strictly narrower, so repeated failure converges on
+    /// single days rather than splitting forever.
+    #[test]
+    fn splitting_terminates() {
+        let mut spec = option_spec();
+        spec.date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+        spec.end_date = NaiveDate::from_ymd_opt(2025, 3, 1);
+
+        let mut frontier = vec![spec];
+        let mut singles = 0;
+        for _ in 0..64 {
+            let mut next = Vec::new();
+            for s in frontier.drain(..) {
+                match s.split_window() {
+                    Some((a, b)) => {
+                        next.push(a);
+                        next.push(b);
+                    }
+                    None => singles += 1,
+                }
+            }
+            if next.is_empty() {
+                break;
+            }
+            frontier = next;
+        }
+        assert!(frontier.is_empty(), "splitting never bottomed out");
+        assert_eq!(singles, 60, "every day in Jan 1 – Mar 1 accounted for once");
+    }
+
+    #[test]
+    fn a_single_day_has_nothing_left_to_split() {
+        let mut spec = option_spec();
+        spec.end_date = Some(spec.date);
+        assert!(spec.split_window().is_none());
+        spec.end_date = None;
+        assert!(spec.split_window().is_none());
+    }
+
+    #[test]
+    fn every_served_flat_file_is_a_dataset() {
+        let kinds = flatfile_kinds();
+        assert_eq!(kinds.len(), thetadatadx::flatfiles::SERVED_DATASETS.len());
+        for k in &kinds {
+            let back = DataKind::parse(k.as_str()).expect("a served flat file parses");
+            assert!(back.is_flatfile());
+        }
+        assert!(kinds
+            .iter()
+            .any(|k| k.as_str() == "flatfile_option_trade_quote"));
+    }
+
+    /// Only what the service serves: a stock open-interest archive does
+    /// not exist, and the app must not be able to queue one.
+    #[test]
+    fn an_unserved_flat_file_is_not_a_dataset() {
+        assert!(DataKind::parse("flatfile_stock_open_interest").is_none());
+        assert!(DataKind::parse("flatfile_option_quote").is_none());
+    }
+
+    #[test]
+    fn a_flat_file_is_gated_by_its_asset_class() {
+        let k = DataKind::parse("flatfile_option_eod").unwrap();
+        assert!(k.is_option());
+        let k = DataKind::parse("flatfile_stock_eod").unwrap();
+        assert!(!k.is_option());
+    }
+
+    /// Filed under the whole-market pseudo-symbol, date last, so the
+    /// Library's scan picks it up like any other dataset.
+    #[test]
+    fn a_flat_file_lands_where_the_library_looks() {
+        let mut spec = option_spec();
+        spec.kind = DataKind::parse("flatfile_option_trade_quote").unwrap();
+        spec.symbol = WHOLE_MARKET.into();
+        assert_eq!(spec.file_stem(), "all_flatfile_option_trade_quote_20260921");
     }
 
     #[test]

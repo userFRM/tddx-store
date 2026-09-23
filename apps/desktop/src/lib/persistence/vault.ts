@@ -20,7 +20,9 @@ const KEY_API_KEY = "creds.api_key";
  *  up on the next launch. */
 export type StoredCredential =
   | { email: string; password: string; apiKey?: undefined }
-  | { apiKey: string; email?: undefined; password?: undefined };
+  /** `email` is optional with a key: flat files need it, market data
+   *  does not. */
+  | { apiKey: string; email?: string; password?: undefined };
 
 let _strongholdPromise: Promise<{ sh: Stronghold; client: Client }> | null = null;
 
@@ -70,7 +72,11 @@ export const vault = {
     // never auto-connect with a credential the user replaced.
     const next: Record<string, string | null> =
       creds.apiKey !== undefined
-        ? { [KEY_API_KEY]: creds.apiKey, [KEY_EMAIL]: null, [KEY_PASSWORD]: null }
+        ? {
+            [KEY_API_KEY]: creds.apiKey,
+            [KEY_EMAIL]: creds.email?.trim() ? creds.email.trim() : null,
+            [KEY_PASSWORD]: null,
+          }
         : { [KEY_EMAIL]: creds.email, [KEY_PASSWORD]: creds.password, [KEY_API_KEY]: null };
     try {
       for (const [key, value] of Object.entries(next)) {
@@ -95,8 +101,13 @@ export const vault = {
       const { client } = await open();
       const store = client.getStore();
       const k = await store.get(KEY_API_KEY).catch(() => null);
-      if (k) return { apiKey: dec.decode(new Uint8Array(k)) };
       const e = await store.get(KEY_EMAIL).catch(() => null);
+      if (k) {
+        return {
+          apiKey: dec.decode(new Uint8Array(k)),
+          email: e ? dec.decode(new Uint8Array(e)) : undefined,
+        };
+      }
       const p = await store.get(KEY_PASSWORD).catch(() => null);
       if (!e || !p) return null;
       return {

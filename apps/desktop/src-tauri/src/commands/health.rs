@@ -57,7 +57,7 @@ pub async fn health(
     }
     let cov = coverage::scan(&PathBuf::from(&cfg.output_dir)).map_err(|e| e.to_string())?;
     let total_bytes_on_disk = cov.iter().map(|c| c.bytes).sum();
-    let total_files_on_disk = cov.iter().map(|c| c.dates.len()).sum();
+    let total_files_on_disk = cov.iter().map(|c| c.files).sum();
     let uptime_secs = APP_BOOT_TS
         .get()
         .map(|t| t.elapsed().as_secs())

@@ -34,7 +34,8 @@ pub async fn connect(state: State<'_, Arc<AppState>>) -> Result<String, String> 
     // An API key entered this session wins, then email + password, then
     // whatever `THETADATA_API_KEY` or the creds file supplies.
     let client = if !cfg.api_key.is_empty() {
-        Client::connect_with_api_key(&cfg.api_key)
+        let email = (!cfg.email.is_empty()).then_some(cfg.email.as_str());
+        Client::connect_with_api_key(&cfg.api_key, email)
             .await
             .map_err(|e| e.to_string())?
     } else if !cfg.email.is_empty() && !cfg.password.is_empty() {
@@ -78,8 +79,17 @@ pub async fn connect(state: State<'_, Arc<AppState>>) -> Result<String, String> 
 #[derive(Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
 pub enum LoginArgs {
-    Password { email: String, password: String },
-    ApiKey { api_key: String },
+    Password {
+        email: String,
+        password: String,
+    },
+    /// `email` is optional: market data needs only the key, flat files
+    /// need the account email alongside it.
+    ApiKey {
+        api_key: String,
+        #[serde(default)]
+        email: Option<String>,
+    },
 }
 
 /// Sign in and connect. Holds the credential in memory for the session
@@ -98,7 +108,10 @@ pub async fn login(state: State<'_, Arc<AppState>>, args: LoginArgs) -> Result<S
                 s.email = email;
                 s.password = password;
             }
-            LoginArgs::ApiKey { api_key } => s.api_key = api_key,
+            LoginArgs::ApiKey { api_key, email } => {
+                s.api_key = api_key;
+                s.email = email.unwrap_or_default();
+            }
         }
     }
     connect(state).await

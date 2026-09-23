@@ -148,7 +148,13 @@ async fn tick(state: &AppState) -> Result<(), String> {
             transforms: Default::default(),
             extra: Default::default(),
         };
-        match queue.enqueue(spec, row.format, &output_dir, 0).await {
+        // One download per fire, so a scheduled run shows up in the
+        // Downloads view like anything queued by hand.
+        let batch = format!("schedule:{}:{}", row.id, date.format("%Y%m%d"));
+        match queue
+            .enqueue_in_batch(spec, row.format, &output_dir, 0, Some(&batch))
+            .await
+        {
             Ok(_) => {
                 if let Err(e) = schedule::mark_fired(queue.pool(), &row.id, now.timestamp()).await {
                     tracing::error!(error = %e, schedule = %row.id, "mark_fired failed");

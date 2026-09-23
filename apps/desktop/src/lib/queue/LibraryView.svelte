@@ -10,11 +10,12 @@
     Library,
     Diff,
     Database,
+    LineChart,
   } from "lucide-svelte";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import { api, fmtBytes, fmtNum, type Coverage } from "$lib/api";
-  import { app, navigate, log, refreshQueueSnapshot, browseTo, loadCoverage } from "$lib/stores/app.svelte";
+  import { app, navigate, log, refreshQueueSnapshot, browseTo, loadCoverage, openViewer } from "$lib/stores/app.svelte";
   import { onMount } from "svelte";
   import CoverageDiff from "$lib/queue/CoverageDiff.svelte";
 
@@ -440,7 +441,7 @@
                   {#each rows as row (row.kind)}
                     <div class="kind-row">
                       <div class="kind-info">
-                        <code class="kind-name">{row.kind}</code>
+                        <code class="kind-name" title={row.kind}>{row.kind}</code>
                         <span class="kind-title text-body-sm fg-muted">{kindLabel(row.kind)}</span>
                       </div>
                       <div class="kind-stats text-figures">
@@ -485,6 +486,16 @@
                         >
                           <RotateCcw size={13} strokeWidth={1.75} />
                         </button>
+                        {#if row.latest_path}
+                          <button
+                            class="btn-icon"
+                            onclick={() => openViewer(row.latest_path!, `${symbol} · ${kindLabel(row.kind)}`)}
+                            title="View the latest file — chart and rows"
+                            aria-label="View the latest {symbol} {row.kind} file"
+                          >
+                            <LineChart size={13} strokeWidth={1.75} />
+                          </button>
+                        {/if}
                         <button
                           class="btn-icon"
                           onclick={() => revealKindDir(row)}
@@ -851,13 +862,18 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
-    min-width: 0;
+    min-width: 140px;
   }
 
+  /* Registry names run long (`option_history_greeks_implied_volatility`)
+     and used to overflow into the stats beside them. */
   .kind-name {
     font-family: var(--font-mono);
     font-size: var(--text-figures);
     color: var(--fg-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .kind-title {
@@ -876,13 +892,16 @@
     white-space: nowrap;
   }
 
+  /* Dimmed rather than hidden: an action you have to hover to discover
+     is one most people never find. */
   .kind-actions {
     display: flex;
     align-items: center;
     gap: 2px;
-    opacity: 0;
+    opacity: 0.55;
     transition: opacity var(--dur-fast) var(--ease-standard);
   }
+  .kind-actions:focus-within { opacity: 1; }
   .kind-row:hover .kind-actions { opacity: 1; }
 
   /* States */

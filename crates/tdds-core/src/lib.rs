@@ -9,6 +9,7 @@
 //!   coverage  — what's already on disk for a given DataSpec.
 //!   progress  — typed progress events emitted by workers.
 
+pub mod chart;
 pub mod client;
 pub mod config;
 pub mod coverage;
@@ -29,7 +30,7 @@ pub use coverage::Coverage;
 pub use format::OutputFormat;
 pub use preview::{preview as preview_parquet, PreviewField, PreviewResult};
 pub use progress::{Progress, ProgressEvent};
-pub use queue::{Queue, Task, TaskStatus};
+pub use queue::{Batch, Queue, Task, TaskStatus};
 pub use registry::{
     all_endpoints, dispatch_raw, dispatch_to_arrow, dispatch_to_file, endpoints_by_category,
     find_endpoint, EndpointInfo, ParamInfo,
@@ -44,7 +45,7 @@ pub use tier::{
     UserTiers, UPGRADE_URL,
 };
 pub use transform::Transforms;
-pub use worker::Pool;
+pub use worker::{Pool, PoolOptions};
 pub use yaml_meta::{catalogue as endpoint_catalogue, EndpointMeta};
 
 #[derive(Debug, thiserror::Error)]

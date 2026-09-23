@@ -1,0 +1,85 @@
+name: Server limits
+
+# Checks that the server-side constraints the app absorbs — the 365-day
+# window cap, the endpoints that refuse `expiration=*`, the ones that
+# refuse `interval=tick` — are still the ones it was built against.
+# None of them are in the registry or the OpenAPI spec; they were found
+# by asking the server, so the only way to notice them changing is to
+# keep asking.
+#
+# IMPORTANT — this signs in to ThetaData. The service keeps one live
+# session per account, so each run closes any other session on the same
+# account: a terminal, the desktop app, a script, a test suite. Give the
+# `THETADATA_LIMITS_API_KEY` secret a key for an account nothing else
+# uses. Without the secret the job skips rather than failing.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC — before US hours, off the hour
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: server-limits
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Server constraints match spec.rs
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      THETADATA_API_KEY: ${{ secrets.THETADATA_LIMITS_API_KEY }}
+    steps:
+      - name: Skip without a dedicated key
+        if: env.THETADATA_API_KEY == ''
+        run: |
+          echo "::notice::THETADATA_LIMITS_API_KEY is not set; skipping. Use a key for an account nothing else signs in to — this job closes any other session on it."
+
+      - uses: actions/checkout@v4
+        if: env.THETADATA_API_KEY != ''
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: env.THETADATA_API_KEY != ''
+
+      - uses: Swatinem/rust-cache@v2
+        if: env.THETADATA_API_KEY != ''
+
+      - name: Check constraints
+        id: check
+        if: env.THETADATA_API_KEY != ''
+        run: |
+          set -o pipefail
+          cargo run --release -p tdds-core --example check_limits 2>&1 | tee limits.log
+
+      - name: Open an issue on drift
+        if: failure() && steps.check.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const log = fs.existsSync('limits.log') ? fs.readFileSync('limits.log', 'utf8') : '(no log)';
+            const drift = log.split('\n').filter(l => l.trim().startsWith('- ')).join('\n') || log.slice(-3000);
+            const title = 'Server constraints drifted from spec.rs';
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo, state: 'open',
+            });
+            if (open.some(i => i.title === title)) return;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body: [
+                'The weekly check found server behaviour that no longer matches what the app absorbs.',
+                'Until `crates/tdds-core/src/spec.rs` is updated, affected downloads will fail or be split for no reason.',
+                '',
+                '```',
+                drift,
+                '```',
+                '',
+                `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              ].join('\n'),
+            });

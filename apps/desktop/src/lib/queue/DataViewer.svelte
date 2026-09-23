@@ -1,8 +1,9 @@
 <script lang="ts">
   /**
-   * Parquet preview modal. Backed by the `parquet_preview` Tauri
-   * command which decodes N rows of any local parquet file into JSON.
-   * Used by the Library "Sample" button and the Detail page Sample tab.
+   * One downloaded file, as a chart (did I get what I asked for?) and as
+   * rows (what exactly is in it). Opened from a Library row's View
+   * action or a finished task. Chart first: it answers the question
+   * people open a file with, and the table is one click away.
    *
    * Virtualised list isn't strictly necessary at the default 100-row
    * limit, but row width on dense schemas (TradeQuoteTick has 27 cols)
@@ -14,12 +15,17 @@
   import IconBid from "$lib/icons/IconBid.svelte";
   import IconAsk from "$lib/icons/IconAsk.svelte";
   import { app } from "$lib/stores/app.svelte";
+  import ChartPanel from "$lib/queue/ChartPanel.svelte";
 
   let {
     open = $bindable(false),
     path = "",
     title = "",
   }: { open: boolean; path: string; title?: string } = $props();
+
+  /** Only Parquet is read back; the other formats are for other tools. */
+  const readable = $derived(path.toLowerCase().endsWith(".parquet"));
+  let tab = $state<"chart" | "rows">("chart");
 
   let result = $state<PreviewResult | null>(null);
   let loading = $state(false);
@@ -28,7 +34,7 @@
   const LIMIT = 100;
 
   async function load() {
-    if (!open || !path) return;
+    if (!open || !path || !readable || tab !== "rows") return;
     loading = true;
     err = null;
     try {
@@ -40,9 +46,9 @@
     }
   }
 
-  $effect(() => { void open; void path; void offset; load(); });
+  $effect(() => { void open; void path; void offset; void tab; load(); });
 
-  function close() { open = false; result = null; offset = 0; }
+  function close() { open = false; result = null; offset = 0; tab = "chart"; }
 
   function fmtCell(v: unknown): string {
     if (v === null || v === undefined) return "—";
@@ -76,13 +82,13 @@
 {#if open}
   <div class="backdrop" onclick={close} role="presentation">
     <div class="card" onclick={(e) => e.stopPropagation()}
-         role="dialog" aria-modal="true" aria-label="Parquet preview"
+         role="dialog" aria-modal="true" aria-label="File viewer"
          tabindex="-1"
          onkeydown={(e) => e.key === "Escape" && close()}>
       <header class="head">
         <div class="title-block">
-          <span class="text-caption">Sample</span>
-          <h2 class="title">{title || "Parquet preview"}</h2>
+          <span class="text-caption">File</span>
+          <h2 class="title">{title || "Downloaded file"}</h2>
           <p class="path text-figures">{path}</p>
           {#if result}
             <div class="meta tabnum">
@@ -97,6 +103,19 @@
         <button class="btn-icon" onclick={close} aria-label="Close"><X size={14} /></button>
       </header>
 
+      <div class="tabs" role="tablist" aria-label="View">
+        <button role="tab" aria-selected={tab === "chart"} class:active={tab === "chart"} onclick={() => (tab = "chart")}>Chart</button>
+        <button role="tab" aria-selected={tab === "rows"} class:active={tab === "rows"} onclick={() => (tab = "rows")}>Rows</button>
+      </div>
+
+      {#if !readable}
+        <div class="body"><div class="state">
+          This file was written as {path.split(".").pop()?.toUpperCase()}. The viewer reads
+          Parquet — open this one in the tool you wrote it for.
+        </div></div>
+      {:else if tab === "chart"}
+        <ChartPanel {path} />
+      {:else}
       <div class="body">
         {#if loading && !result}
           <div class="state"><Loader2 class="spin" size={16} /> Decoding parquet…</div>
@@ -154,11 +173,30 @@
           </div>
         </footer>
       {/if}
+      {/if}
     </div>
   </div>
 {/if}
 
 <style>
+  .tabs {
+    display: flex;
+    gap: 2px;
+    padding: 0 var(--sp-5);
+    border-bottom: 1px solid var(--border);
+  }
+  .tabs button {
+    border: none;
+    background: none;
+    padding: 10px 12px;
+    font: inherit;
+    font-size: var(--text-body-sm);
+    color: var(--fg-muted);
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    cursor: pointer;
+  }
+  .tabs button.active { color: var(--fg); border-bottom-color: var(--accent); }
   .backdrop {
     position: fixed; inset: 0;
     background: var(--scrim);

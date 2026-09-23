@@ -33,6 +33,7 @@
   import Console from "$lib/feedback/Console.svelte";
   import ErrorToasts from "$lib/feedback/ErrorToasts.svelte";
   import CommandPalette from "$lib/feedback/CommandPalette.svelte";
+  import SessionLostBanner from "$lib/feedback/SessionLostBanner.svelte";
   import DataViewer from "$lib/queue/DataViewer.svelte";
   import { loadSavedSearches } from "$lib/persistence/savedSearches";
   import EndpointRunner from "$lib/runners/EndpointRunner.svelte";
@@ -220,6 +221,7 @@
     </nav>
 
     <main class="main">
+      <SessionLostBanner />
       {#if app.currentView === "detail" && app.detailDataset}
         <DetailView />
       {:else if app.currentView === "home"}

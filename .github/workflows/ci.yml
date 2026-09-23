@@ -67,5 +67,10 @@ jobs:
       - name: svelte-check (type + a11y)
         run: npm run check
 
+      # Neither svelte-check nor cargo can see across the invoke boundary:
+      # a snake_case argument key type-checks and then fails at runtime.
+      - name: invoke argument keys match the Rust commands
+        run: python3 ../../scripts/check-invoke-args.py
+
       - name: vite build
         run: npm run build

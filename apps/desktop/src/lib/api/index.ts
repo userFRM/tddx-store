@@ -25,25 +25,52 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
   return tauriInvoke<T>(cmd, args);
 }
 
+export type Watchlist = { name: string; symbols: string[] };
+
+/** How the user works. Pre-fills and tunes; never blocks a choice. */
+export type Preferences = {
+  default_format: "parquet" | "csv" | "jsonl" | "json";
+  default_asset_class: "stock" | "option" | "index" | "rate";
+  default_dataset: string | null;
+  default_range_years: number;
+  watchlists: Watchlist[];
+  /** Fewer concurrent downloads than the plan allows; null = whole budget. */
+  max_concurrency: number | null;
+  notify_on_complete: boolean;
+  split_failed_windows: boolean;
+};
+
+export const DEFAULT_PREFERENCES: Preferences = {
+  default_format: "parquet",
+  default_asset_class: "stock",
+  default_dataset: null,
+  default_range_years: 3,
+  watchlists: [],
+  max_concurrency: null,
+  notify_on_complete: true,
+  split_failed_windows: true,
+};
+
 export type Settings = {
   db_path: string;
   output_dir: string;
   creds_path: string;
   email?: string;
   password?: string;
+  preferences: Preferences;
 };
 
 /** Tagged to match the Rust `LoginArgs` enum, so "an API key plus a
  *  blank password" is not representable on either side. */
 export type LoginArgs =
   | { method: "password"; email: string; password: string }
-  | { method: "api_key"; api_key: string };
+  | { method: "api_key"; api_key: string; email?: string | null };
 
 export type Counts = [string, number][];
 
 export type TaskView = {
   id: string;
-  status: "pending" | "running" | "done" | "failed" | "empty";
+  status: "pending" | "running" | "done" | "failed" | "empty" | "paused";
   kind: string;
   symbol: string;
   date: string;
@@ -76,6 +103,8 @@ export type Coverage = {
   /** Every date on disk, ISO `YYYY-MM-DD`. The span alone cannot show
    *  gaps, which is the whole point of a coverage view. */
   dates: string[];
+  /** The file holding the latest date, to open without guessing a name. */
+  latest_path: string | null;
   /** Extension the existing files use, so a refill writes the same
    *  format as the rest of the set. */
   format: string;
@@ -85,6 +114,60 @@ export type Transforms = {
   scale?: Record<string, number>;
   rename?: Record<string, string>;
   drop?: string[];
+};
+
+/** What a selection becomes once the app has absorbed the server's
+ *  constraints — the window cap, the per-day endpoint shape, and the
+ *  endpoints that refuse an expiration wildcard. */
+/** One download as the user asked for it, rolled up from its tasks. */
+export type Batch = {
+  id: string;
+  kind: string;
+  symbols: number;
+  first_symbol: string;
+  start: string;
+  end: string;
+  format: string;
+  total: number;
+  pending: number;
+  running: number;
+  paused: number;
+  done: number;
+  empty: number;
+  failed: number;
+  /** Failed tasks re-queued as narrower windows; their work continues
+   *  in their halves, so they count toward neither progress nor failure. */
+  split: number;
+  rows: number;
+  bytes: number;
+  created_at: number;
+  /** First task picked up; null until one has been. */
+  started_at: number | null;
+  finished_at: number | null;
+  /** Mean seconds per finished task, measured on this batch. */
+  avg_task_secs: number | null;
+};
+
+/** One file summarised for a chart; see `tdds_core::chart`. */
+export type ChartSeries = {
+  shape: "candles" | "line" | "band";
+  rows: number;
+  daily: boolean;
+  x: number[];
+  open: (number | null)[];
+  high: (number | null)[];
+  low: (number | null)[];
+  close: (number | null)[];
+  bid: (number | null)[];
+  ask: (number | null)[];
+  volume: (number | null)[];
+  gaps: { from_ms: number; to_ms: number }[];
+};
+
+export type EnqueuePlan = {
+  requests: number;
+  windows: number;
+  expirations: number;
 };
 
 export type EnqueueArgs = {
@@ -105,6 +188,9 @@ export type EnqueueArgs = {
    *  param name; keys the endpoint does not declare are dropped when
    *  the task is lowered onto a request, not rejected. */
   extra?: Record<string, string> | null;
+  /** One id for a whole submission, so ten symbols queued together read
+   *  as one download. */
+  batch_id?: string | null;
 };
 
 export type EndpointParam = {
@@ -165,6 +251,14 @@ export const api = {
   logout: () => invoke<void>("logout"),
   connect: () => invoke<string>("connect"),
   login: (args: LoginArgs) => invoke<string>("login", { args }),
+  /** What `enqueue` would queue, without queueing it. Same code path,
+   *  so the number shown is the number that happens. */
+  estimate: (args: EnqueueArgs) => invoke<EnqueuePlan>("estimate", { args }),
+  batches: () => invoke<Batch[]>("batches"),
+  chartSeries: (path: string) => invoke<ChartSeries>("chart_series", { path }),
+  pauseBatch: (id: string) => invoke<number>("pause_batch", { id }),
+  resumeBatch: (id: string) => invoke<number>("resume_batch", { id }),
+  removeBatch: (id: string) => invoke<number>("remove_batch", { id }),
   enqueue: (args: EnqueueArgs) => invoke<number>("enqueue", { args }),
   snapshot: () => invoke<QueueSnapshot>("snapshot"),
   coverage: () => invoke<Coverage[]>("coverage_report"),
@@ -185,8 +279,11 @@ export const api = {
     invoke<number>("clear_tasks", { status: status ?? null }),
   workerPoolActive: () => invoke<boolean>("worker_pool_active"),
   health: () => invoke<HealthSnapshot>("health"),
-  duckdbCommand: (output_dir: string) =>
-    invoke<{ sql: string; path: string; hint: string }>("duckdb_command", { output_dir }),
+  /** Tauri 2 maps a Rust `output_dir` parameter to the camelCase key
+   *  `outputDir` on the JS side; passing the snake_case key is rejected
+   *  as a missing argument. */
+  duckdbCommand: (outputDir: string) =>
+    invoke<{ sql: string; path: string; hint: string }>("duckdb_command", { outputDir }),
   endpointsList: () => invoke<EndpointInfo[]>("endpoints_list"),
   /** Intervals this dataset accepts. Omitting the kind returns them all,
    *  which is only correct for a picker not attached to a dataset. */
@@ -194,7 +291,6 @@ export const api = {
     invoke<IntervalOption[]>("interval_options", { kind: kind ?? null }),
   endpointInvoke: (args: InvokeArgs) => invoke<number>("endpoint_invoke", { args }),
   listQuery: (args: ListQueryArgs) => invoke<string[]>("list_query", { args }),
-  flatfileDownload: (args: FlatfileArgs) => invoke<string>("flatfile_download", { args }),
   flatfileDatasets: () => invoke<FlatfileDataset[]>("flatfile_datasets"),
   /** The exact trading days absent from a set's span, `YYYY-MM-DD`.
    *  Read-only; the count matches what `requeueMissingDates` would act
@@ -449,15 +545,13 @@ export type FlatfileReqType = "trade_quote" | "open_interest" | "eod";
 export type FlatfileDataset = {
   sec_type: FlatfileSecType;
   req_type: FlatfileReqType;
+  /** The dataset kind that queues it, e.g. `flatfile_option_trade_quote`. */
+  kind: string;
 };
 
-export type FlatfileArgs = {
-  sec_type: FlatfileSecType;
-  req_type: FlatfileReqType;
-  date: string;
-  output_path: string;
-  format: "CSV" | "JSONL";
-};
+/** A whole-market flat file has no symbol; this is what it is filed under. */
+export const WHOLE_MARKET = "ALL";
+
 
 export type IndexPresetView = {
   id: string;

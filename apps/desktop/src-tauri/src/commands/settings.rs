@@ -93,7 +93,18 @@ pub async fn settings_set(
         }
     }
 
-    *state.settings.write().await = settings;
+    // The frontend never holds the credential fields — they are
+    // `skip_serializing`, so they never reach it — which means the
+    // struct it sends back always has them empty. Replacing wholesale
+    // would sign the session out of its own credentials on every
+    // "Save", and the next reconnect would fail. Keep what is in
+    // memory; the vault owns those.
+    let mut current = state.settings.write().await;
+    let mut settings = settings;
+    settings.email = std::mem::take(&mut current.email);
+    settings.password = std::mem::take(&mut current.password);
+    settings.api_key = std::mem::take(&mut current.api_key);
+    *current = settings;
     Ok(())
 }
 

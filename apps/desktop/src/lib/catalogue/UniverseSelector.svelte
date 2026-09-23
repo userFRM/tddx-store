@@ -1,14 +1,16 @@
 <script lang="ts">
   /**
    * Step 2 — Which symbols?
-   * Three modes: Single (autocomplete) · Index preset (dropdown) · Custom list (textarea).
+   * Three modes: Symbols (chip input with autocomplete — one ticker or
+   * fifty, typed or pasted) · Watchlist (saved in Settings) · Index
+   * preset (live constituents).
    * Emits a flat string[] of uppercase ticker symbols to the parent.
    */
   import { onMount } from "svelte";
-  import { User, Layers, List, Loader2 } from "lucide-svelte";
-  import SymbolPicker from "$lib/composer/SymbolPicker.svelte";
+  import { Tags, Layers, Loader2, Star } from "lucide-svelte";
+  import SymbolChips from "$lib/composer/SymbolChips.svelte";
   import { api, TAURI_AVAILABLE } from "$lib/api";
-  import { log } from "$lib/stores/app.svelte";
+  import { app, log, navigate } from "$lib/stores/app.svelte";
   import type { AssetClass } from "$lib/stores/app.svelte";
   import type { IndexPresetView } from "$lib/api";
 
@@ -20,11 +22,14 @@
     symbols: string[];
   } = $props();
 
-  type Mode = "single" | "preset" | "custom";
-  let mode = $state<Mode>("single");
+  type Mode = "symbols" | "watchlist" | "preset";
+  let mode = $state<Mode>("symbols");
 
-  // Single mode
-  let singleSymbol = $state("");
+  // Symbols mode: one ticker or many, as chips. This replaced a single-
+  // symbol autocomplete and a separate paste box, which forced a choice
+  // between "autocomplete" and "more than one" that nobody should have
+  // to make.
+  let chosen = $state<string[]>([]);
 
   // Index preset mode
   let presets = $state<IndexPresetView[]>([]);
@@ -37,26 +42,22 @@
   let constituentsLoading = $state(false);
   let constituentsError = $state("");
 
-  // Custom list mode
-  let customRaw = $state("");
 
-  function parseCustom(raw: string): string[] {
-    return raw
-      .split(/[\s,;\n]+/)
-      .map((s) => s.trim().toUpperCase())
-      .filter((s) => s.length > 0);
-  }
+  // Watchlist mode — named lists kept in Settings, so the same dozen
+  // tickers are one click rather than retyped every time.
+  const watchlists = $derived(app.settings.preferences?.watchlists ?? []);
+  let selectedWatchlist = $state(0);
+
 
   // Sync outbound symbols whenever inputs change
   $effect(() => {
-    if (mode === "single") {
-      const s = singleSymbol.trim().toUpperCase();
-      symbols = s ? [s] : [];
+    if (mode === "symbols") {
+      symbols = [...chosen];
+    } else if (mode === "watchlist") {
+      symbols = [...(watchlists[selectedWatchlist]?.symbols ?? [])];
     } else if (mode === "preset") {
       const cached = constituentsCache[selectedPresetId];
       symbols = cached ? [...cached] : [];
-    } else {
-      symbols = parseCustom(customRaw);
     }
   });
 
@@ -111,10 +112,10 @@
     if (mode === "preset") loadPresets();
   });
 
-  const MODES: { id: Mode; label: string; icon: typeof User; description: string }[] = [
-    { id: "single", label: "Single symbol",  icon: User,   description: "One ticker with autocomplete" },
-    { id: "preset", label: "Index preset",   icon: Layers, description: "S&P 500, Nasdaq-100, etc." },
-    { id: "custom", label: "Custom list",    icon: List,   description: "Paste any ticker list" },
+  const MODES: { id: Mode; label: string; icon: typeof Tags; description: string }[] = [
+    { id: "symbols",   label: "Symbols",       icon: Tags,   description: "One or many, with autocomplete" },
+    { id: "watchlist", label: "Watchlist",     icon: Star,   description: "A list saved in Settings" },
+    { id: "preset",    label: "Index preset",  icon: Layers, description: "S&P 500, Nasdaq-100, etc." },
   ];
 
   const countLabel = $derived(
@@ -146,13 +147,28 @@
 
   <!-- Input area for the selected mode -->
   <div class="input-area">
-    {#if mode === "single"}
-      <SymbolPicker
-        bind:value={singleSymbol}
-        {assetClass}
-        placeholder={assetClass === "option" ? "Option root, e.g. SPX" : "e.g. QQQ, SPY, AAPL"}
-        autofocus={false}
-      />
+    {#if mode === "symbols"}
+      <SymbolChips bind:symbols={chosen} {assetClass}
+        placeholder={assetClass === "option" ? "Add option roots — e.g. SPX, SPY" : "Add symbols — e.g. SPY, QQQ, AAPL"} />
+
+    {:else if mode === "watchlist"}
+      {#if watchlists.length === 0}
+        <p class="empty-hint">
+          No watchlists yet.
+          <button type="button" class="link-btn" onclick={() => navigate("settings")}>
+            Create one in Settings
+          </button>
+          to reuse a set of tickers.
+        </p>
+      {:else}
+        <div class="preset-picker">
+          <select class="field-input" bind:value={selectedWatchlist}>
+            {#each watchlists as w, i (i)}
+              <option value={i}>{w.name} · {w.symbols.length} symbol{w.symbols.length === 1 ? "" : "s"}</option>
+            {/each}
+          </select>
+        </div>
+      {/if}
 
     {:else if mode === "preset"}
       {#if presetsLoading}
@@ -194,15 +210,6 @@
         </div>
       {/if}
 
-    {:else}
-      <textarea
-        class="custom-textarea"
-        bind:value={customRaw}
-        placeholder={"AAPL, MSFT, GOOGL\nQQQ\nSPY, IWM, TLT"}
-        rows={5}
-        spellcheck={false}
-      ></textarea>
-      <p class="custom-hint">Comma, newline, or space separated. Duplicates are removed automatically.</p>
     {/if}
   </div>
 
@@ -211,7 +218,7 @@
     <span class="count-label tabnum" class:has-symbols={symbols.length > 0}>
       {countLabel}
     </span>
-    {#if mode === "custom" && symbols.length > 0}
+    {#if mode !== "symbols" && symbols.length > 0}
       <span class="sample-preview">
         {symbols.slice(0, 6).join(", ")}{symbols.length > 6 ? ` +${symbols.length - 6} more` : ""}
       </span>
@@ -307,6 +314,15 @@
     border-radius: var(--r-sm);
   }
 
+  .link-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--accent);
+    cursor: pointer;
+    font: inherit;
+    text-decoration: underline;
+  }
   .preset-picker {
     display: flex;
     flex-direction: column;
@@ -319,42 +335,9 @@
     padding: 0 var(--sp-1);
   }
 
-  .custom-textarea {
-    width: 100%;
-    padding: var(--sp-3);
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: var(--r-sm);
-    color: var(--fg);
-    font-family: var(--font-mono);
-    font-size: var(--text-body-sm);
-    font-variant-numeric: tabular-nums;
-    resize: vertical;
-    outline: none;
-    line-height: 1.6;
-    transition: border-color var(--dur-fast) var(--ease-standard),
-                box-shadow var(--dur-fast) var(--ease-standard);
-  }
 
-  .custom-textarea:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 2px var(--accent-tint);
-  }
 
-  .custom-textarea::placeholder {
-    color: var(--fg-subtle);
-    font-family: var(--font-ui);
-    font-variant-numeric: normal;
-  }
 
-  .custom-hint {
-    font-size: var(--text-caption);
-    color: var(--fg-subtle);
-    text-transform: none;
-    letter-spacing: 0;
-    font-weight: var(--weight-normal);
-    margin-top: var(--sp-1);
-  }
 
   .symbol-count {
     display: flex;

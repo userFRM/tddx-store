@@ -24,3 +24,17 @@ pub async fn parquet_preview(args: PreviewArgs) -> Result<PreviewResult, String>
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
 }
+
+/// A chart's worth of points from one downloaded file, with the gaps
+/// found in it. Runs off the async runtime: a day of trades is millions
+/// of rows to read.
+#[tauri::command]
+pub async fn chart_series(path: String) -> Result<tdds_core::chart::ChartSeries, String> {
+    let path = std::path::PathBuf::from(path);
+    tokio::task::spawn_blocking(move || {
+        tdds_core::chart::series(&path, tdds_core::chart::MAX_POINTS)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}

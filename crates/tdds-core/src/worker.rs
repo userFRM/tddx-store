@@ -16,15 +16,43 @@ use tokio::sync::{mpsc, Mutex};
 
 use crate::client::Client;
 use crate::coverage::dataset_path;
-use crate::format::write_batch;
+use crate::format::{write_batch, OutputFormat};
 use crate::progress::{Progress, ProgressEvent};
 use crate::queue::{Queue, Task};
 use crate::tier::UserTiers;
+
+/// Behaviour the user can choose, as opposed to limits the account
+/// imposes.
+#[derive(Debug, Clone, Copy)]
+pub struct PoolOptions {
+    /// Run fewer workers than the plan allows. The in-flight budget is
+    /// account-wide, so someone running their own scripts against the
+    /// same account needs to leave headroom for them. `None` uses the
+    /// whole budget.
+    pub max_concurrency: Option<usize>,
+    /// Re-queue a failed windowed task as two halves rather than
+    /// leaving it as one failed row.
+    pub split_failed_windows: bool,
+}
+
+impl Default for PoolOptions {
+    fn default() -> Self {
+        Self {
+            max_concurrency: None,
+            split_failed_windows: true,
+        }
+    }
+}
 
 pub struct Pool {
     client: Client,
     queue: Queue,
     tiers: UserTiers,
+    options: PoolOptions,
+    /// Set by the first worker to see the session invalidated. Every
+    /// worker checks it before claiming, so the pool stops rather than
+    /// burning through the queue on a dead session.
+    halted: Arc<std::sync::atomic::AtomicBool>,
     progress: Arc<Mutex<Progress>>,
     events_tx: Option<mpsc::Sender<ProgressEvent>>,
 }
@@ -39,9 +67,23 @@ impl Pool {
             client,
             queue,
             tiers,
+            options: PoolOptions::default(),
+            halted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             progress: Arc::new(Mutex::new(Progress::new())),
             events_tx: None,
         }
+    }
+
+    pub fn with_options(mut self, options: PoolOptions) -> Self {
+        self.options = options;
+        self
+    }
+
+    /// How many workers this run will use: the plan's account-wide
+    /// budget, lowered to the user's cap when they set one, and never
+    /// fewer than one.
+    pub fn worker_count(&self) -> usize {
+        effective_workers(self.tiers.in_flight_budget(), self.options.max_concurrency)
     }
 
     pub fn with_events(mut self, tx: mpsc::Sender<ProgressEvent>) -> Self {
@@ -56,12 +98,16 @@ impl Pool {
     /// Drain the queue. Returns once every worker has seen it empty.
     pub async fn run(&self) -> crate::Result<()> {
         let mut handles = Vec::new();
-        for _ in 0..self.tiers.in_flight_budget() {
+        let split = self.options.split_failed_windows;
+        for _ in 0..self.worker_count() {
             let client = self.client.clone();
             let queue = self.queue.clone();
             let progress = self.progress.clone();
             let tx = self.events_tx.clone();
-            handles.push(tokio::spawn(run_worker(client, queue, progress, tx)));
+            let halted = self.halted.clone();
+            handles.push(tokio::spawn(run_worker(
+                client, queue, progress, tx, split, halted,
+            )));
         }
         for h in handles {
             let _ = h.await;
@@ -75,8 +121,14 @@ async fn run_worker(
     queue: Queue,
     progress: Arc<Mutex<Progress>>,
     tx: Option<mpsc::Sender<ProgressEvent>>,
+    split_failed_windows: bool,
+    halted: Arc<std::sync::atomic::AtomicBool>,
 ) {
+    use std::sync::atomic::Ordering;
     loop {
+        if halted.load(Ordering::Acquire) {
+            break;
+        }
         let task = match queue.claim_next().await {
             Ok(Some(t)) => t,
             Ok(None) => break,
@@ -110,6 +162,9 @@ async fn run_worker(
         // leaving the in-flight task pinned in `running`
         // forever and dropping our concurrency by one.
         use futures::FutureExt;
+        // Measured, not estimated: the transfers view derives speed and
+        // ETA from how long tasks actually take.
+        let started = std::time::Instant::now();
         let res = match std::panic::AssertUnwindSafe(run_one(&client, &task))
             .catch_unwind()
             .await
@@ -155,7 +210,7 @@ async fn run_worker(
                             let _ = tx
                                 .send(ProgressEvent::Empty {
                                     task_id: task.id.clone(),
-                                    millis: 0,
+                                    millis: started.elapsed().as_millis() as u64,
                                 })
                                 .await;
                         }
@@ -175,7 +230,7 @@ async fn run_worker(
                                         task_id: task.id.clone(),
                                         rows: rows as u64,
                                         bytes,
-                                        millis: 0,
+                                        millis: started.elapsed().as_millis() as u64,
                                     })
                                     .await;
                             }
@@ -188,8 +243,41 @@ async fn run_worker(
                     }
                 }
             },
+            Err(e) if classify(&e.to_string()) == FailureKind::SessionLost => {
+                // Not the task's fault: hand it back untouched and stop
+                // the pool. The first worker to notice reports it; the
+                // rest just return their tasks.
+                if let Err(err) = queue.release(&task.id).await {
+                    tracing::error!(?err, task_id = %task.id, "could not release task");
+                }
+                let first = !halted.swap(true, Ordering::AcqRel);
+                if first {
+                    if let Some(tx) = &tx {
+                        let _ = tx
+                            .send(ProgressEvent::SessionLost {
+                                message: e.to_string(),
+                            })
+                            .await;
+                    }
+                }
+            }
             Err(e) => {
-                let msg = e.to_string();
+                let mut msg = e.to_string();
+                // A task can now be a year wide, or a year wide per
+                // expiration. Retrying all of that because it failed
+                // near the end throws away everything that worked, so
+                // re-queue it as two narrower windows instead: each
+                // half is strictly smaller, so repeated failure
+                // converges on the days that actually fail rather than
+                // repeating the ones that do not.
+                if split_failed_windows {
+                    if let Some(n) = split_failed_window(&queue, &task, &msg).await {
+                        msg = format!(
+                            "{msg} ({} {n} narrower windows)",
+                            crate::queue::SPLIT_MARKER
+                        );
+                    }
+                }
                 match queue.mark_failed(&task.id, &msg).await {
                     Ok(true) => {
                         if let Some(tx) = &tx {
@@ -197,7 +285,7 @@ async fn run_worker(
                                 .send(ProgressEvent::Failed {
                                     task_id: task.id.clone(),
                                     error: msg,
-                                    millis: 0,
+                                    millis: started.elapsed().as_millis() as u64,
                                 })
                                 .await;
                         }
@@ -210,6 +298,86 @@ async fn run_worker(
                 }
             }
         }
+    }
+}
+
+/// The plan's budget, lowered to the user's cap, never below one. A cap
+/// above the budget is not a way to exceed the plan — the server would
+/// only throttle the extra workers — so it is clamped rather than
+/// honoured.
+fn effective_workers(budget: usize, cap: Option<usize>) -> usize {
+    cap.map_or(budget, |c| c.min(budget)).max(1)
+}
+
+/// Re-queue a failed windowed task as two halves. Returns how many were
+/// queued, or `None` when splitting does not apply.
+///
+/// Deliberately not attempted for a failure the request itself caused:
+/// a malformed argument fails identically at any width, so splitting it
+/// just doubles the number of rows saying the same thing.
+async fn split_failed_window(queue: &Queue, task: &Task, error: &str) -> Option<usize> {
+    // Width only matters for a failure width can cause. Splitting a
+    // lost session or a malformed request just doubles the rows saying
+    // the same thing — which is what happened when a second client
+    // signed in mid-run and every affected window was bisected.
+    if classify(error) != FailureKind::Transient {
+        return None;
+    }
+    let (first, second) = task.spec.split_window()?;
+    let mut queued = 0;
+    for spec in [first, second] {
+        // The halves stay in the download the user asked for.
+        match queue
+            .enqueue_in_batch(
+                spec,
+                task.format,
+                &task.output_dir,
+                task.priority,
+                task.batch_id.as_deref(),
+            )
+            .await
+        {
+            Ok(_) => queued += 1,
+            Err(e) => {
+                tracing::error!(?e, task_id = %task.id, "could not re-queue split window");
+                return None;
+            }
+        }
+    }
+    Some(queued)
+}
+
+/// What a failure says, which decides what to do about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FailureKind {
+    /// The session was invalidated — another client signed in to the
+    /// same account. Nothing is wrong with the task, and retrying on
+    /// this session cannot succeed.
+    SessionLost,
+    /// The server refused the shape of the request. Fails identically
+    /// at any width and on any retry: the app's bug, not the network's.
+    BadRequest,
+    /// Anything else: timeouts, resets, unavailability. Worth retrying,
+    /// and worth narrowing if the task covers a window.
+    Transient,
+}
+
+fn classify(msg: &str) -> FailureKind {
+    let m = msg.to_lowercase();
+    if m.contains("unauthenticated") || m.contains("invalid session") {
+        FailureKind::SessionLost
+    } else if m.contains("missing required arg")
+        || m.contains("unknown endpoint")
+        || m.contains("invalidargument")
+        || m.contains("permissiondenied")
+        || m.contains("cannot specify")
+        // A key-only sign-in cannot open the flat-file server; retrying
+        // on the same credentials fails identically.
+        || m.contains("flatfiles unavailable: market-data auth rejected")
+    {
+        FailureKind::BadRequest
+    } else {
+        FailureKind::Transient
     }
 }
 
@@ -287,6 +455,38 @@ async fn run_one(client: &Client, task: &Task) -> crate::Result<Outcome> {
         return Ok(Outcome::AlreadyOnDisk { bytes });
     }
 
+    // A flat file is one archive for the whole market and one day,
+    // fetched straight to disk by its own request rather than through
+    // the registry dispatcher. The service writes CSV or JSONL; the
+    // planner refuses anything else before a task is queued.
+    if let Some((sec, req)) = task.spec.kind.flatfile() {
+        let fmt = match task.format {
+            OutputFormat::Csv => thetadatadx::flatfiles::FlatFileFormat::Csv,
+            OutputFormat::Jsonl => thetadatadx::flatfiles::FlatFileFormat::Jsonl,
+            other => {
+                return Err(crate::Error::Other(format!(
+                    "flat files are delivered as CSV or JSONL, not {}",
+                    other.extension()
+                )))
+            }
+        };
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        client
+            .raw()
+            .flatfile_request(sec, req, &task.spec.ymd(), &path, fmt)
+            .await?;
+        let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        // Rows are not counted: an archive runs to gigabytes, and
+        // reading it back to count lines would double the work.
+        return Ok(if bytes == 0 {
+            Outcome::NoData
+        } else {
+            Outcome::Written { rows: 0, bytes }
+        });
+    }
+
     // One dispatch path for every kind: `DataSpec` lowers onto the same
     // registry spec the endpoint browser uses, so argument validation,
     // wire coercion, and Arrow column projection are identical whichever
@@ -300,4 +500,63 @@ async fn run_one(client: &Client, task: &Task) -> crate::Result<Outcome> {
     write_batch(&transformed, &path, task.format)?;
     let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
     Ok(Outcome::Written { rows, bytes })
+}
+
+#[cfg(test)]
+mod pool_tests {
+    use super::{classify, effective_workers, FailureKind};
+
+    /// The exact message ThetaData sends when a second client signs in
+    /// to the same account.
+    #[test]
+    fn a_taken_over_session_is_recognised() {
+        let msg = r#"invoke stock_history_eod: Server(Grpc { kind: Unauthenticated, message: "Invalid session ID. This can occur if more than one terminal is running." })"#;
+        assert_eq!(classify(msg), FailureKind::SessionLost);
+    }
+
+    /// Width cannot fix these, so they must never be split.
+    #[test]
+    fn malformed_requests_are_not_transient() {
+        for msg in [
+            "missing required arg 'start_date' for endpoint 'stock_history_eod'",
+            r#"Server(Grpc { kind: InvalidArgument, message: "Too many days" })"#,
+            "Error parsing expiration Cannot specify '*' for the date",
+            r#"Server(Grpc { kind: PermissionDenied, message: "tier" })"#,
+            "thetadatadx: FLATFILES unavailable: market-data auth rejected (RemoveReason ord=1)",
+        ] {
+            assert_eq!(classify(msg), FailureKind::BadRequest, "{msg}");
+        }
+    }
+
+    #[test]
+    fn network_trouble_is_worth_retrying() {
+        for msg in [
+            "Server(Timeout { duration_ms: 8000 })",
+            r#"Server(Grpc { kind: Unavailable, message: "connection reset" })"#,
+            "panic: something",
+        ] {
+            assert_eq!(classify(msg), FailureKind::Transient, "{msg}");
+        }
+    }
+
+    #[test]
+    fn no_cap_uses_the_whole_budget() {
+        assert_eq!(effective_workers(8, None), 8);
+    }
+
+    #[test]
+    fn a_cap_below_the_budget_leaves_headroom() {
+        assert_eq!(effective_workers(8, Some(3)), 3);
+    }
+
+    #[test]
+    fn a_cap_above_the_budget_cannot_exceed_the_plan() {
+        assert_eq!(effective_workers(8, Some(64)), 8);
+    }
+
+    #[test]
+    fn there_is_always_at_least_one_worker() {
+        assert_eq!(effective_workers(8, Some(0)), 1);
+        assert_eq!(effective_workers(0, None), 1);
+    }
 }
