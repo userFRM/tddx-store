@@ -87,6 +87,15 @@ export type Transforms = {
   drop?: string[];
 };
 
+/** What a selection becomes once the app has absorbed the server's
+ *  constraints — the window cap, the per-day endpoint shape, and the
+ *  endpoints that refuse an expiration wildcard. */
+export type EnqueuePlan = {
+  requests: number;
+  windows: number;
+  expirations: number;
+};
+
 export type EnqueueArgs = {
   kind: string;
   symbol: string;
@@ -165,6 +174,9 @@ export const api = {
   logout: () => invoke<void>("logout"),
   connect: () => invoke<string>("connect"),
   login: (args: LoginArgs) => invoke<string>("login", { args }),
+  /** What `enqueue` would queue, without queueing it. Same code path,
+   *  so the number shown is the number that happens. */
+  estimate: (args: EnqueueArgs) => invoke<EnqueuePlan>("estimate", { args }),
   enqueue: (args: EnqueueArgs) => invoke<number>("enqueue", { args }),
   snapshot: () => invoke<QueueSnapshot>("snapshot"),
   coverage: () => invoke<Coverage[]>("coverage_report"),
@@ -185,8 +197,11 @@ export const api = {
     invoke<number>("clear_tasks", { status: status ?? null }),
   workerPoolActive: () => invoke<boolean>("worker_pool_active"),
   health: () => invoke<HealthSnapshot>("health"),
-  duckdbCommand: (output_dir: string) =>
-    invoke<{ sql: string; path: string; hint: string }>("duckdb_command", { output_dir }),
+  /** Tauri 2 maps a Rust `output_dir` parameter to the camelCase key
+   *  `outputDir` on the JS side; passing the snake_case key is rejected
+   *  as a missing argument. */
+  duckdbCommand: (outputDir: string) =>
+    invoke<{ sql: string; path: string; hint: string }>("duckdb_command", { outputDir }),
   endpointsList: () => invoke<EndpointInfo[]>("endpoints_list"),
   /** Intervals this dataset accepts. Omitting the kind returns them all,
    *  which is only correct for a picker not attached to a dataset. */

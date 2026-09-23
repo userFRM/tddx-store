@@ -72,6 +72,7 @@ pub fn run() {
             connection::login,
             connection::logout,
             queue::enqueue,
+            queue::estimate,
             queue::snapshot,
             queue::run_queue,
             queue::worker_pool_active,

@@ -23,7 +23,7 @@
   import IntervalPicker from "$lib/catalogue/IntervalPicker.svelte";
   import SmartFilters from "$lib/catalogue/SmartFilters.svelte";
   import ParamForm from "$lib/catalogue/ParamForm.svelte";
-  import { api, type EnqueueArgs } from "$lib/api";
+  import { api, type EnqueueArgs, type EnqueuePlan } from "$lib/api";
   import { app, tierForKind, log, type AssetClass, refreshQueueSnapshot, openEndpointRunner} from "$lib/stores/app.svelte";
   import { saveSearch } from "$lib/persistence/savedSearches";
   import { openUrl } from "@tauri-apps/plugin-opener";
@@ -233,6 +233,56 @@
     return syms * trading;
   });
 
+  // The exact plan, from the code that does the queueing.
+  //
+  // The approximation above cannot know the things the app now hides:
+  // that a window wider than a year becomes several requests, or that
+  // the endpoints refusing `expiration=*` fan out over every live
+  // expiration — which for a liquid name is hundreds. Someone selecting
+  // greeks over three years is committing to a lot more than the
+  // trading-day count suggests, and used to find that out from the
+  // queue filling up.
+  let plan = $state<EnqueuePlan | null>(null);
+  let planning = $state(false);
+
+  $effect(() => {
+    // Track what the plan depends on.
+    const deps = [kindId, symbols[0], start, end, format, paramValues["expiration"]];
+    void deps;
+
+    if (!readyToQueue || !symbols[0]) {
+      plan = null;
+      return;
+    }
+    let cancelled = false;
+    planning = true;
+    // The plan can cost a round trip (trading days, expirations), so
+    // settle before asking rather than on every keystroke.
+    const timer = setTimeout(() => {
+      api
+        .estimate({ ...enqueueArgsFor(symbols[0]) })
+        .then((p) => {
+          if (!cancelled) plan = p;
+        })
+        .catch(() => {
+          if (!cancelled) plan = null;
+        })
+        .finally(() => {
+          if (!cancelled) planning = false;
+        });
+    }, 400);
+    return () => {
+      cancelled = true;
+      planning = false;
+      clearTimeout(timer);
+    };
+  });
+
+  /** Requests across every selected symbol, not just the one planned. */
+  const requestEstimate = $derived(
+    plan === null ? null : plan.requests * Math.max(1, symbols.length),
+  );
+
   // ── Step state helper ─────────────────────────────────────────
   type StepState = "completed" | "active" | "locked";
   function stepState(step: number): StepState {
@@ -283,6 +333,27 @@
     "interval", "expiration", "strike", "right", "request_type",
   ]);
 
+  /** The arguments one symbol would be queued with. Shared so the
+   *  estimate plans exactly what the queue will do. */
+  function enqueueArgsFor(symbol: string): EnqueueArgs {
+    const isOption = kindId.startsWith("option_");
+    return {
+      kind: kindId,
+      symbol,
+      format,
+      interval: interval || "tick",
+      start: start || null,
+      end: end || null,
+      expiration: isOption ? (paramValues["expiration"] ?? null) : null,
+      strike: isOption ? (paramValues["strike"] ?? null) : null,
+      right:
+        isOption && paramValues["right"] !== "both"
+          ? (paramValues["right"] ?? null)
+          : null,
+      extra: extraArgs(),
+    };
+  }
+
   function extraArgs(): Record<string, string> {
     const out: Record<string, string> = {};
     for (const p of selectedParams) {
@@ -306,22 +377,7 @@
 
     for (const symbol of symbols) {
       try {
-        const isOption = kindId.startsWith("option_");
-        const args: EnqueueArgs = {
-          kind: kindId,
-          symbol,
-          format,
-          interval: interval || "tick",
-          start: start || null,
-          end: end || null,
-          expiration: isOption ? (paramValues["expiration"] ?? null) : null,
-          strike: isOption ? (paramValues["strike"] ?? null) : null,
-          right:
-            isOption && paramValues["right"] !== "both"
-              ? (paramValues["right"] ?? null)
-              : null,
-          extra: extraArgs(),
-        };
+        const args = enqueueArgsFor(symbol);
         const n = await api.enqueue(args);
         totalTasks += n;
       } catch (e: unknown) {
@@ -611,11 +667,19 @@
           {/if}
           &nbsp;&middot;&nbsp;
           <span class="fmt-val">{format.charAt(0).toUpperCase() + format.slice(1)}</span>
-          {#if taskEstimate > 1}
+          {#if requestEstimate !== null && requestEstimate > 1}
             &nbsp;&middot;&nbsp;
-            <span class="task-estimate" title="Approximate — backend computes exact trading days at enqueue time">
-              ~{taskEstimate.toLocaleString()} tasks
+            <span
+              class="task-estimate"
+              title={plan && plan.expirations > 1
+                ? `${plan.windows} window${plan.windows === 1 ? "" : "s"} × ${plan.expirations} expirations × ${symbols.length} symbol${symbols.length === 1 ? "" : "s"} — this dataset needs one request per expiration`
+                : `${plan?.windows ?? 0} window${(plan?.windows ?? 0) === 1 ? "" : "s"} × ${symbols.length} symbol${symbols.length === 1 ? "" : "s"}`}
+            >
+              {requestEstimate.toLocaleString()} requests
             </span>
+          {:else if planning && taskEstimate > 1}
+            &nbsp;&middot;&nbsp;
+            <span class="task-estimate">~{taskEstimate.toLocaleString()} requests</span>
           {/if}
         </span>
       {:else if isRunOnce}
