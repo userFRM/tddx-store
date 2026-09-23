@@ -846,12 +846,15 @@
     border-top: 1px solid var(--border);
   }
 
+  /* Name and stats share what is left after the gap toggle and the
+     actions, and give way before the row overflows: a horizontal
+     scrollbar hid the actions entirely. */
   .kind-row {
     display: grid;
-    grid-template-columns: 1fr auto auto auto;
+    grid-template-columns: minmax(110px, 0.7fr) minmax(0, 1.3fr) auto auto;
     align-items: center;
     gap: var(--sp-4);
-    padding: var(--sp-3) var(--sp-8) var(--sp-3) calc(var(--sp-8) + 80px + var(--sp-3));
+    padding: var(--sp-3) var(--sp-8) var(--sp-3) calc(var(--sp-8) + 32px);
     border-bottom: 1px solid var(--border);
     transition: background var(--dur-fast) var(--ease-standard);
   }
@@ -862,7 +865,7 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
-    min-width: 140px;
+    min-width: 0;
   }
 
   /* Registry names run long (`option_history_greeks_implied_volatility`)
@@ -890,6 +893,9 @@
     color: var(--fg-muted);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   /* Dimmed rather than hidden: an action you have to hover to discover
