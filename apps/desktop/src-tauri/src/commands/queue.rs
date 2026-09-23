@@ -261,7 +261,7 @@ async fn disk_usage(state: &AppState, output_dir: &str) -> Result<DiskUsage, Str
     let cov = coverage::scan(&PathBuf::from(output_dir)).map_err(|e| e.to_string())?;
     let usage = DiskUsage {
         bytes: cov.iter().map(|c| c.bytes).sum(),
-        files: cov.iter().map(|c| c.dates.len()).sum(),
+        files: cov.iter().map(|c| c.files).sum(),
     };
     *state.disk_usage.lock().await = Some((std::time::Instant::now(), usage));
     Ok(usage)

@@ -9,6 +9,7 @@
 //!   coverage  — what's already on disk for a given DataSpec.
 //!   progress  — typed progress events emitted by workers.
 
+pub mod chart;
 pub mod client;
 pub mod config;
 pub mod coverage;

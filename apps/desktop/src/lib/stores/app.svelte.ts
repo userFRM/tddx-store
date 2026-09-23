@@ -636,6 +636,11 @@ export function datasetById(name: string): DatasetMeta | null {
   return entry ? datasetFromCatalogue(entry) : null;
 }
 
+/** Open a downloaded file in the viewer — chart first, rows a tab away. */
+export function openViewer(path: string, title: string) {
+  app.viewer = { open: true, path, title };
+}
+
 export function openDetail(d: DatasetMeta) {
   app.detailDataset = d;
   app.currentView = "detail";

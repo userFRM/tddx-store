@@ -100,6 +100,7 @@ pub fn run() {
             index_presets::index_presets,
             index_presets::index_constituents,
             preview::parquet_preview,
+            preview::chart_series,
             schedule::schedule_list,
             schedule::schedule_create,
             schedule::schedule_delete,

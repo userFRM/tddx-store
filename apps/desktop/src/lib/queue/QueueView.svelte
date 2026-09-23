@@ -28,11 +28,12 @@
     AlertCircle,
     Search,
     ArrowRight,
+    LineChart,
   } from "lucide-svelte";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import TransfersList from "$lib/queue/TransfersList.svelte";
   import { friendlyError } from "$lib/util/errors";
-  import { app, log, navigate, refreshQueueSnapshot } from "$lib/stores/app.svelte";
+  import { app, log, navigate, openViewer, refreshQueueSnapshot } from "$lib/stores/app.svelte";
   import { api, fmtBytes, fmtNum, type TaskView } from "$lib/api";
 
   type StatusFilter = "all" | "pending" | "running" | "paused" | "done" | "failed" | "empty";
@@ -487,6 +488,16 @@
             >
               <Copy size={13} strokeWidth={1.75} />
             </button>
+            {#if task.status === "done" && task.path.endsWith(".parquet")}
+              <button
+                class="btn-icon"
+                onclick={() => openViewer(task.path, `${task.symbol} · ${task.kind}`)}
+                title="View the file — chart and rows"
+                aria-label="View the file for {task.symbol} {task.date}"
+              >
+                <LineChart size={13} strokeWidth={1.75} />
+              </button>
+            {/if}
             {#if task.status === "done"}
               <button
                 class="btn-icon"

@@ -103,6 +103,8 @@ export type Coverage = {
   /** Every date on disk, ISO `YYYY-MM-DD`. The span alone cannot show
    *  gaps, which is the whole point of a coverage view. */
   dates: string[];
+  /** The file holding the latest date, to open without guessing a name. */
+  latest_path: string | null;
   /** Extension the existing files use, so a refill writes the same
    *  format as the rest of the set. */
   format: string;
@@ -144,6 +146,22 @@ export type Batch = {
   finished_at: number | null;
   /** Mean seconds per finished task, measured on this batch. */
   avg_task_secs: number | null;
+};
+
+/** One file summarised for a chart; see `tdds_core::chart`. */
+export type ChartSeries = {
+  shape: "candles" | "line" | "band";
+  rows: number;
+  daily: boolean;
+  x: number[];
+  open: (number | null)[];
+  high: (number | null)[];
+  low: (number | null)[];
+  close: (number | null)[];
+  bid: (number | null)[];
+  ask: (number | null)[];
+  volume: (number | null)[];
+  gaps: { from_ms: number; to_ms: number }[];
 };
 
 export type EnqueuePlan = {
@@ -237,6 +255,7 @@ export const api = {
    *  so the number shown is the number that happens. */
   estimate: (args: EnqueueArgs) => invoke<EnqueuePlan>("estimate", { args }),
   batches: () => invoke<Batch[]>("batches"),
+  chartSeries: (path: string) => invoke<ChartSeries>("chart_series", { path }),
   pauseBatch: (id: string) => invoke<number>("pause_batch", { id }),
   resumeBatch: (id: string) => invoke<number>("resume_batch", { id }),
   removeBatch: (id: string) => invoke<number>("remove_batch", { id }),
