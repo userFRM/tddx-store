@@ -131,6 +131,9 @@ pub async fn requeue_missing_dates(
             .await
             .map_err(|e| e.to_string())?;
     }
+    if !gaps.dates.is_empty() {
+        state.notify(crate::events::QUEUE_CHANGED);
+    }
     Ok(gaps.dates.len())
 }
 

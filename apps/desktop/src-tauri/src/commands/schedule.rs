@@ -11,6 +11,7 @@ use serde::Deserialize;
 use tauri::State;
 use tdds_core::{format::OutputFormat, schedule, DataKind, DataSpec, Schedule};
 
+use crate::events;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -62,6 +63,7 @@ pub async fn schedule_create(
     schedule::insert(queue.pool(), &s)
         .await
         .map_err(|e| e.to_string())?;
+    state.notify(events::SCHEDULES_CHANGED);
     Ok(s)
 }
 
@@ -70,9 +72,10 @@ pub async fn schedule_delete(state: State<'_, Arc<AppState>>, id: String) -> Res
     let queue_guard = state.queue.read().await;
     let queue = queue_guard.as_ref().ok_or("queue not opened")?.clone();
     drop(queue_guard);
-    schedule::delete(queue.pool(), &id)
+    let r = schedule::delete(queue.pool(), &id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string());
+    state.notify_ok(events::SCHEDULES_CHANGED, r)
 }
 
 #[tauri::command]
@@ -84,9 +87,10 @@ pub async fn schedule_set_paused(
     let queue_guard = state.queue.read().await;
     let queue = queue_guard.as_ref().ok_or("queue not opened")?.clone();
     drop(queue_guard);
-    schedule::set_paused(queue.pool(), &id, paused)
+    let r = schedule::set_paused(queue.pool(), &id, paused)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string());
+    state.notify_ok(events::SCHEDULES_CHANGED, r)
 }
 
 /// Poll the schedule table once a minute and enqueue whatever is due.
@@ -128,6 +132,7 @@ async fn tick(state: &AppState) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?;
 
+    let mut fired = false;
     for row in rows {
         // Which session is available is an Eastern-time question, and
         // separate from the local-clock time the user picked to fire
@@ -156,6 +161,7 @@ async fn tick(state: &AppState) -> Result<(), String> {
             .await
         {
             Ok(_) => {
+                fired = true;
                 if let Err(e) = schedule::mark_fired(queue.pool(), &row.id, now.timestamp()).await {
                     tracing::error!(error = %e, schedule = %row.id, "mark_fired failed");
                 } else {
@@ -169,6 +175,10 @@ async fn tick(state: &AppState) -> Result<(), String> {
             // than silently skipping a day.
             Err(e) => tracing::error!(error = %e, schedule = %row.id, "schedule enqueue failed"),
         }
+    }
+    if fired {
+        state.notify(events::QUEUE_CHANGED);
+        state.notify(events::SCHEDULES_CHANGED);
     }
     Ok(())
 }

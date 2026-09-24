@@ -99,8 +99,9 @@
   let filterQuery = $state("");
   let expandedSymbols = $state<Set<string>>(new Set());
 
-  // Shared with Home, and invalidated by the queue poll when a task
-  // finishes, so the numbers here do not go stale behind a download.
+  // Shared with Home, and refreshed by the store whenever the output
+  // directory changes, so the numbers here do not go stale behind a
+  // download or an edit in Finder.
   onMount(() => void loadCoverage());
 
   // Group by symbol, filtering on the symbol AND the dataset, because
@@ -457,9 +458,13 @@
     if (willOpen && filesBySet[k]?.status !== "ready") await loadFiles(row);
   }
 
-  async function loadFiles(row: Coverage) {
+  async function loadFiles(row: Coverage, quiet = false) {
     const k = setKey(row);
-    filesBySet = { ...filesBySet, [k]: { status: "loading" } };
+    // A background refresh keeps the current list up until the new one
+    // arrives, so rows don't flash to "Listing files…" mid-download.
+    if (!quiet || filesBySet[k]?.status !== "ready") {
+      filesBySet = { ...filesBySet, [k]: { status: "loading" } };
+    }
     try {
       const files = await api.libraryFiles(row.kind, row.symbol);
       filesBySet = { ...filesBySet, [k]: { status: "ready", files } };
@@ -470,6 +475,19 @@
       };
     }
   }
+
+  // Open file listings follow the folder too: re-read the ones showing,
+  // and forget the rest so they load fresh when opened.
+  let seenRev = app.libraryRev;
+  $effect(() => {
+    const rev = app.libraryRev;
+    if (rev === seenRev) return;
+    seenRev = rev;
+    const keep: Record<string, FilesState> = {};
+    for (const [k, v] of Object.entries(filesBySet)) if (expandedSets.has(k)) keep[k] = v;
+    filesBySet = keep;
+    for (const row of app.coverage) if (expandedSets.has(setKey(row))) void loadFiles(row, true);
+  });
 
   function setExpanded(it: Item, open: boolean) {
     if (it.type === "symbol") {

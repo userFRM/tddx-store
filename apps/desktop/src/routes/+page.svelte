@@ -77,8 +77,8 @@
     void loadSavedSearches();
     void loadCatalogue();
     void loadDatasetFormats();
-    // Subscribe to backend progress events so the UI is push-updated
-    // (Tier 2 "real" progress); SQLite polling stays as the safety net.
+    // Subscribe to backend events (worker progress, queue, library) so
+    // the UI updates when something changes rather than on a timer.
     startProgressListener();
   });
   onDestroy(() => {

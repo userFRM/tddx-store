@@ -69,7 +69,7 @@
     if (composer.format !== "csv" && composer.format !== "jsonl") composer.format = "csv";
   });
 
-  let timer: ReturnType<typeof setInterval> | null = null;
+  let unlisten: (() => void) | null = null;
 
   async function refresh() {
     if (!TAURI_AVAILABLE) return;
@@ -85,9 +85,15 @@
   onMount(() => {
     refresh();
     api.flatfileDatasets().then((f) => (flatfiles = f)).catch(() => {});
-    timer = setInterval(refresh, 10_000);
+    // Re-read when a schedule is added, paused, removed or fires.
+    if (TAURI_AVAILABLE) {
+      import("@tauri-apps/api/event")
+        .then(({ listen }) => listen("tdds:schedules-changed", () => void refresh()))
+        .then((un) => (unlisten = un))
+        .catch(() => {});
+    }
   });
-  onDestroy(() => timer && clearInterval(timer));
+  onDestroy(() => unlisten?.());
 
   async function create() {
     const symbol = isFlatfile ? WHOLE_MARKET : composer.symbol.trim().toUpperCase();

@@ -21,14 +21,21 @@ pub struct AppState {
     pub client: RwLock<Option<Client>>,
     pub settings: RwLock<Settings>,
     /// Last on-disk footprint reading, with the instant it was taken.
-    /// `snapshot` polls every 1.5s and the reading costs a full walk of
-    /// the output tree, so it is refreshed on a slower cadence than the
-    /// queue counts it travels with.
+    /// The reading costs a full walk of the output tree, so snapshots
+    /// and Health share it; the library watcher clears it on change.
     pub disk_usage: Mutex<Option<(std::time::Instant, DiskUsage)>>,
     /// Held by `commands::queue::run_queue` so a second click can't
     /// double-spawn workers. `JoinHandle` is `!Sync` only via inner
     /// state; `Mutex` keeps it safe across the await of `is_finished`.
     pub worker_handle: Mutex<Option<JoinHandle<()>>>,
+    /// Set once in the setup hook, so state changes can be announced to
+    /// the webview from anywhere that holds the state.
+    pub app: std::sync::OnceLock<tauri::AppHandle>,
+    /// The output-directory watcher. Replaced when the directory moves;
+    /// dropping it stops the watch.
+    pub watcher: std::sync::Mutex<
+        Option<notify_debouncer_mini::Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>>,
+    >,
 }
 
 // Path defaults intentionally derive to empty `String`s. They get

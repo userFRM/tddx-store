@@ -6,12 +6,10 @@
 //! Cargo manifest) and the runtime-resolved Cargo.lock entries from
 //! `build.rs`, so the Health panel reflects exactly what's bundled.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::State;
-use tdds_core::coverage;
 
 use crate::state::AppState;
 
@@ -55,9 +53,10 @@ pub async fn health(
             }
         }
     }
-    let cov = coverage::scan(&PathBuf::from(&cfg.output_dir)).map_err(|e| e.to_string())?;
-    let total_bytes_on_disk = cov.iter().map(|c| c.bytes).sum();
-    let total_files_on_disk = cov.iter().map(|c| c.files).sum();
+    // Shared with the queue snapshot, and cleared by the library watcher.
+    let usage = super::queue::disk_usage(&state, &cfg.output_dir).await?;
+    let total_bytes_on_disk = usage.bytes;
+    let total_files_on_disk = usage.files;
     let uptime_secs = APP_BOOT_TS
         .get()
         .map(|t| t.elapsed().as_secs())

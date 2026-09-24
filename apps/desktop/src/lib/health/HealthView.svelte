@@ -1,9 +1,9 @@
 <script lang="ts">
   /**
    * Read-only telemetry: SDK versions, pool size, in-flight workers,
-   * task counts, on-disk totals, uptime. Polls `health` every 3 s
-   * because nothing in this surface needs sub-second responsiveness
-   * — the queue panel already runs at 1.5 s.
+   * task counts, on-disk totals, uptime. Re-reads `health` whenever the
+   * queue or the library changes, which is when any of it can move;
+   * uptime counts on locally between reads.
    */
   import { onMount, onDestroy } from "svelte";
   import {
@@ -22,22 +22,50 @@
 
   let snap = $state<HealthSnapshot | null>(null);
   let err = $state<string | null>(null);
-  let timer: ReturnType<typeof setInterval> | null = null;
+  let clock: ReturnType<typeof setInterval> | null = null;
+  /** When `snap` was read, so uptime can advance without asking again. */
+  let readAt = $state(0);
+  let now = $state(Date.now());
+  const uptime = $derived(snap ? snap.uptime_secs + Math.max(0, Math.floor((now - readAt) / 1000)) : 0);
 
+  let reading = false;
+  let readAgain = false;
   async function refresh() {
     if (!TAURI_AVAILABLE) return;
+    // One read at a time; changes during it earn one more read after.
+    if (reading) {
+      readAgain = true;
+      return;
+    }
+    reading = true;
     try {
       snap = await api.health();
+      readAt = Date.now();
+      now = readAt;
       err = null;
     } catch (e: unknown) {
       err = e instanceof Error ? e.message : String(e);
+    } finally {
+      reading = false;
+    }
+    if (readAgain) {
+      readAgain = false;
+      void refresh();
     }
   }
-  onMount(() => {
-    refresh();
-    timer = setInterval(refresh, 3000);
+  // Pool, counts and footprint change exactly when the queue snapshot or
+  // the library does; follow those instead of a timer.
+  $effect(() => {
+    void app.queueSnap;
+    void app.libraryRev;
+    void app.runningTaskIds.length;
+    void refresh();
   });
-  onDestroy(() => timer && clearInterval(timer));
+  onMount(() => {
+    // Display only: no call to the backend.
+    clock = setInterval(() => (now = Date.now()), 1000);
+  });
+  onDestroy(() => clock && clearInterval(clock));
 
   function fmtUptime(s: number): string {
     if (s < 60) return `${s}s`;
@@ -53,7 +81,7 @@
     <h1 class="title">Health</h1>
     <p class="sub fg-muted">
       Pool size, in-flight workers, queue counts, on-disk footprint and
-      uptime. Refreshes every 3 seconds while open.
+      uptime. Updates as the queue and the library change.
     </p>
   </header>
 
@@ -115,7 +143,7 @@
       <div class="card">
         <div class="card-head"><Clock size={14} /><span class="text-caption">Uptime</span></div>
         <div class="metric tabnum">
-          <span class="v">{fmtUptime(snap.uptime_secs)}</span>
+          <span class="v">{fmtUptime(uptime)}</span>
         </div>
       </div>
 
