@@ -18,7 +18,7 @@
     Lock,
     ArrowUpRight,
   } from "lucide-svelte";
-  import { app, startQueuePoll, stopQueuePoll, loadSettings, log } from "$lib/stores/app.svelte";
+  import { app, startQueuePoll, stopQueuePoll, loadSettings, log, navigate } from "$lib/stores/app.svelte";
   import { api } from "$lib/api";
   import { vault } from "$lib/persistence/vault";
   import { openUrl } from "@tauri-apps/plugin-opener";
@@ -87,6 +87,9 @@
     // can take seconds. Waiting on it first is what made the button
     // look dead.
     stopQueuePoll();
+    // The next sign-in starts a fresh session, so it opens on Home
+    // rather than the Settings page the previous one ended on.
+    navigate("home");
     app.connState = "idle";
     app.connMsg = "";
     app.tierStatus = null;
