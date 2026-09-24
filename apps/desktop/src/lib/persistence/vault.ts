@@ -50,7 +50,7 @@ async function open(): Promise<{ sh: Stronghold; client: Client }> {
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
-export const vault = {
+const raw = {
   /**
    * Atomic save: insert both fields, persist to disk; on failure roll
    * back the in-memory store changes by removing the (possibly partial)
@@ -69,7 +69,7 @@ export const vault = {
       [KEY_API_KEY]: await store.get(KEY_API_KEY).catch(() => null),
     };
     // Whichever method was not used is removed, so the next launch can
-    // never auto-connect with a credential the user replaced.
+    // never prefill a credential the user replaced.
     const next: Record<string, string | null> =
       creds.apiKey !== undefined
         ? {
@@ -120,15 +120,31 @@ export const vault = {
   },
 
   async clear(): Promise<void> {
-    try {
-      const { sh, client } = await open();
-      const store = client.getStore();
-      for (const key of [KEY_EMAIL, KEY_PASSWORD, KEY_API_KEY]) {
-        await store.remove(key).catch(() => {});
-      }
-      await sh.save();
-    } catch {
-      /* nothing to clear */
+    // No vault to open means nothing was ever saved. A failed write is
+    // different: the credential is still on disk and the caller must
+    // hear about it, or "Sign out" would claim a success it didn't have.
+    const opened = await open().catch(() => null);
+    if (!opened) return;
+    const store = opened.client.getStore();
+    for (const key of [KEY_EMAIL, KEY_PASSWORD, KEY_API_KEY]) {
+      await store.remove(key).catch(() => {});
     }
+    await opened.sh.save();
   },
+};
+
+// One operation at a time. The sign-in path saves without awaiting, so
+// a sign-out right after could interleave with that save and leave the
+// credential it just removed back on disk.
+let _tail: Promise<unknown> = Promise.resolve();
+function serial<T>(fn: () => Promise<T>): Promise<T> {
+  const run = _tail.then(fn, fn);
+  _tail = run.catch(() => {});
+  return run;
+}
+
+export const vault = {
+  save: (creds: StoredCredential) => serial(() => raw.save(creds)),
+  load: () => serial(() => raw.load()),
+  clear: () => serial(() => raw.clear()),
 };

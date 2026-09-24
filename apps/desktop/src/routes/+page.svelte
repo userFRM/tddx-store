@@ -67,7 +67,7 @@
   } from "$lib/stores/app.svelte";
 
   // ── On mount: load settings + saved searches + yaml catalogue;
-  //     LoginGate auto-connects. The catalogue comes from the
+  //     LoginGate prefills a saved credential. The catalogue comes from the
   //     vendored yaml + auto-fetched runtime override — does NOT
   //     need a connection so the dataset store is browseable
   //     even before sign-in.
