@@ -26,7 +26,7 @@ pub mod worker;
 pub mod yaml_meta;
 
 pub use client::Client;
-pub use coverage::Coverage;
+pub use coverage::{Coverage, LibraryFile};
 pub use format::OutputFormat;
 pub use preview::{preview as preview_parquet, PreviewField, PreviewResult};
 pub use progress::{Progress, ProgressEvent};

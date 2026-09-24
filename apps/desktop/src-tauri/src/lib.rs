@@ -15,8 +15,8 @@ mod secrets;
 mod state;
 
 use commands::{
-    connection, coverage as coverage_cmd, endpoints, flatfiles, health, index_presets, preview,
-    queue, schedule, settings, tier, vault,
+    connection, coverage as coverage_cmd, endpoints, flatfiles, health, index_presets, library,
+    preview, queue, schedule, settings, tier, vault,
 };
 use state::AppState;
 
@@ -91,6 +91,9 @@ pub fn run() {
             coverage_cmd::requeue_missing_dates,
             coverage_cmd::missing_dates,
             coverage_cmd::duckdb_command,
+            library::library_files,
+            library::library_resolve,
+            library::library_trash,
             endpoints::endpoints_list,
             endpoints::endpoint_invoke,
             endpoints::list_query,

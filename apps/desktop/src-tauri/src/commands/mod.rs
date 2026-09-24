@@ -11,6 +11,7 @@ pub mod endpoints;
 pub mod flatfiles;
 pub mod health;
 pub mod index_presets;
+pub mod library;
 pub mod preview;
 pub mod queue;
 pub mod schedule;
