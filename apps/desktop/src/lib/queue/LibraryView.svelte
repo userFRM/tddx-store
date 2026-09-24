@@ -587,7 +587,9 @@
     for (const k of touched) delete rest[k];
     filesBySet = rest;
     clearSelection();
-    await loadCoverage(true);
+    // Home and the Queue tab show the footprint too; refresh them now
+    // rather than on their next poll.
+    await Promise.all([loadCoverage(true), refreshQueueSnapshot()]);
     for (const it of items) {
       if (it.type !== "file") continue;
       const k = setKey(it.row);

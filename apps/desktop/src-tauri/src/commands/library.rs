@@ -130,9 +130,14 @@ pub async fn library_trash(
     let bytes = files.iter().map(|(_, b)| b).sum();
     let paths: Vec<PathBuf> = files.into_iter().map(|(p, _)| p).collect();
     let n = paths.len();
-    tokio::task::spawn_blocking(move || trash_all(&paths))
+    let result = tokio::task::spawn_blocking(move || trash_all(&paths))
         .await
-        .map_err(|e| e.to_string())??;
+        .map_err(|e| e.to_string())?;
+    // The Queue tab's footprint is cached for a few seconds; after a
+    // delete it would show the old size until the cache ran out. Drop
+    // it even on a partial failure, since some files may have moved.
+    *state.disk_usage.lock().await = None;
+    result?;
     Ok(TrashResult { files: n, bytes })
 }
 
