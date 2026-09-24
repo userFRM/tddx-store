@@ -59,3 +59,29 @@ pub async fn index_presets() -> Result<Vec<IndexPresetView>, String> {
         preset("rut", "Russell 2000", "~2000 small-cap US equities"),
     ])
 }
+
+#[cfg(all(test, feature = "presets"))]
+mod tests {
+    use super::*;
+
+    /// Every offered preset resolves to a plausible ticker count.
+    /// Network-bound, so opt-in: `cargo test -- --ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn every_preset_loads() {
+        for p in index_presets().await.unwrap() {
+            let n = fetch_index_constituents(&p.id).await.unwrap().len();
+            let (lo, hi) = match p.id.as_str() {
+                "sp500" => (495, 510),
+                "ndx" => (98, 104),
+                "sp400" => (395, 405),
+                "sp600" => (595, 610),
+                "dji" => (30, 30),
+                "rut" => (1900, 2050),
+                _ => unreachable!(),
+            };
+            println!("{}: {n} tickers", p.id);
+            assert!((lo..=hi).contains(&n), "{}: {n} tickers", p.id);
+        }
+    }
+}

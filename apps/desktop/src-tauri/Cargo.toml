@@ -26,7 +26,7 @@ toml = "0.8"
 [dependencies]
 tdds-core = { path = "../../../crates/tdds-core" }
 thetadatadx.workspace = true
-indexkit = { git = "https://github.com/kovagent/indexkit", branch = "fix/sponsor-fallback-and-latest", optional = true }
+indexkit = { version = "2.0.0", optional = true }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
