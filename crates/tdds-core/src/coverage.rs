@@ -69,28 +69,17 @@ pub fn scan(root: &Path) -> crate::Result<Vec<Coverage>> {
         for f in std::fs::read_dir(kind_entry.path())? {
             let f = f?;
             let name = f.file_name().to_string_lossy().into_owned();
-            // expected: <symbol>_<kind>_<YYYYMMDD>.<ext>
-            let (stem, ext) = match name.rsplit_once('.') {
-                Some(parts) => parts,
-                None => continue,
-            };
-            let parts: Vec<&str> = stem.split('_').collect();
-            if parts.len() < 3 {
-                continue;
-            }
-            let ymd_str = parts[parts.len() - 1];
-            let Ok(d) = NaiveDate::parse_from_str(ymd_str, "%Y%m%d") else {
+            let Some(parsed) = parse_file_name(&name) else {
                 continue;
             };
-            // <symbol>_<kind...>_<YYYYMMDD>. Symbol = first underscore-segment.
-            let symbol = parts[0].to_uppercase();
-            let entry = out.entry((kind.clone(), symbol)).or_default();
+            let d = parsed.start;
+            let entry = out.entry((kind.clone(), parsed.symbol)).or_default();
             // A file from a range endpoint covers a whole window, named
             // by its start with the end as a `to<YYYYMMDD>` qualifier.
             // Reading only the start made a year of data count as one
             // day, so the Library understated every span and "check
             // gaps" reported the rest of the year as missing.
-            match range_end(&parts) {
+            match parsed.end {
                 Some(end) if end > d => {
                     let mut day = d;
                     while day <= end {
@@ -110,7 +99,7 @@ pub fn scan(root: &Path) -> crate::Result<Vec<Coverage>> {
             entry.files += 1;
             entry.bytes += f.metadata().map(|m| m.len()).unwrap_or(0);
             if entry.format.is_none() {
-                entry.format = OutputFormat::parse(ext);
+                entry.format = OutputFormat::parse(&parsed.ext);
             }
             if entry.latest.as_ref().is_none_or(|(latest, _)| d >= *latest) {
                 entry.latest = Some((d, f.path()));
@@ -129,6 +118,84 @@ pub fn scan(root: &Path) -> crate::Result<Vec<Coverage>> {
             latest_path: tally.latest.map(|(_, p)| p.to_string_lossy().into_owned()),
         })
         .collect())
+}
+
+/// What a library filename says about its contents:
+/// `<symbol>_<dataset>[_<qualifier>]_<YYYYMMDD>.<ext>`.
+struct ParsedName {
+    symbol: String,
+    start: NaiveDate,
+    end: Option<NaiveDate>,
+    ext: String,
+}
+
+fn parse_file_name(name: &str) -> Option<ParsedName> {
+    let (stem, ext) = name.rsplit_once('.')?;
+    let parts: Vec<&str> = stem.split('_').collect();
+    if parts.len() < 3 {
+        return None;
+    }
+    let start = NaiveDate::parse_from_str(parts[parts.len() - 1], "%Y%m%d").ok()?;
+    Some(ParsedName {
+        // Symbol = first underscore-segment.
+        symbol: parts[0].to_uppercase(),
+        start,
+        end: range_end(&parts),
+        ext: ext.to_string(),
+    })
+}
+
+/// One file in the library, for a listing that goes below the
+/// (dataset, symbol) summary to what is actually on disk.
+#[derive(Debug, Serialize, Clone)]
+pub struct LibraryFile {
+    pub path: String,
+    pub name: String,
+    /// First day the file holds.
+    pub start: NaiveDate,
+    /// Last day, for a range file; `None` when it holds one day.
+    pub end: Option<NaiveDate>,
+    pub bytes: u64,
+    /// Last modification, milliseconds since the Unix epoch.
+    pub modified_ms: Option<i64>,
+    pub format: String,
+}
+
+/// Every file of one (dataset, symbol) under `root`, newest first.
+pub fn files(root: &Path, kind: &DataKind, symbol: &str) -> crate::Result<Vec<LibraryFile>> {
+    let dir = root.join(kind.as_str());
+    if !dir.is_dir() {
+        return Ok(vec![]);
+    }
+    let mut out = Vec::new();
+    for f in std::fs::read_dir(&dir)? {
+        let f = f?;
+        if !f.file_type()?.is_file() {
+            continue;
+        }
+        let name = f.file_name().to_string_lossy().into_owned();
+        let Some(parsed) = parse_file_name(&name) else {
+            continue;
+        };
+        if !parsed.symbol.eq_ignore_ascii_case(symbol) {
+            continue;
+        }
+        let meta = f.metadata().ok();
+        out.push(LibraryFile {
+            path: f.path().to_string_lossy().into_owned(),
+            name,
+            start: parsed.start,
+            end: parsed.end.filter(|e| *e > parsed.start),
+            bytes: meta.as_ref().map(|m| m.len()).unwrap_or(0),
+            modified_ms: meta
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as i64),
+            format: parsed.ext,
+        });
+    }
+    out.sort_by(|a, b| b.start.cmp(&a.start).then_with(|| a.name.cmp(&b.name)));
+    Ok(out)
 }
 
 /// The `to<YYYYMMDD>` qualifier a range file carries, if any.
@@ -159,6 +226,28 @@ pub fn missing(
 #[cfg(test)]
 mod range_tests {
     use super::*;
+
+    #[test]
+    fn files_lists_one_symbol_newest_first() {
+        let dir = std::env::temp_dir().join(format!("tdds-files-{}", std::process::id()));
+        let kind_dir = dir.join("stock_history_eod");
+        std::fs::create_dir_all(&kind_dir).unwrap();
+        for name in [
+            "spy_stock_history_eod_20240102.parquet",
+            "spy_stock_history_eod_to20240112_20240103.parquet",
+            "qqq_stock_history_eod_20240102.parquet",
+            "notes.txt",
+        ] {
+            std::fs::write(kind_dir.join(name), b"x").unwrap();
+        }
+        let kind = DataKind::parse("stock_history_eod").unwrap();
+        let got = files(&dir, &kind, "SPY").unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(got.len(), 2, "only SPY, only library files");
+        assert_eq!(got[0].start, NaiveDate::from_ymd_opt(2024, 1, 3).unwrap());
+        assert_eq!(got[0].end, NaiveDate::from_ymd_opt(2024, 1, 12));
+        assert_eq!(got[1].end, None);
+    }
 
     #[test]
     fn a_range_file_covers_its_whole_window() {

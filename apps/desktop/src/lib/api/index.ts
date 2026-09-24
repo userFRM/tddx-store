@@ -93,6 +93,26 @@ export type QueueSnapshot = {
   files_on_disk: number;
 };
 
+/** One file under a (dataset, symbol) in the Library. */
+export type LibraryFile = {
+  path: string;
+  name: string;
+  /** First day held, `YYYY-MM-DD`. */
+  start: string;
+  /** Last day, for a range file. */
+  end: string | null;
+  bytes: number;
+  modified_ms: number | null;
+  format: string;
+};
+
+/** A Library selection as the backend resolves it: whole sets plus
+ *  individually picked files. */
+export type LibraryTargets = {
+  sets: { kind: string; symbol: string }[];
+  files: string[];
+};
+
 export type Coverage = {
   kind: string;
   symbol: string;
@@ -306,6 +326,15 @@ export const api = {
     invoke<string[]>("missing_dates", { kind, symbol }),
   requeueMissingDates: (kind: string, symbol: string) =>
     invoke<number>("requeue_missing_dates", { kind, symbol }),
+  libraryFiles: (kind: string, symbol: string) =>
+    invoke<LibraryFile[]>("library_files", { kind, symbol }),
+  /** File count and size of a selection, from the same resolution the
+   *  delete uses. */
+  libraryResolve: (targets: LibraryTargets) =>
+    invoke<{ files: number; bytes: number }>("library_resolve", { targets }),
+  /** Move a selection to the Trash. */
+  libraryTrash: (targets: LibraryTargets) =>
+    invoke<{ files: number; bytes: number }>("library_trash", { targets }),
   indexPresets: () => invoke<IndexPresetView[]>("index_presets"),
   indexConstituents: (indexId: string) => invoke<string[]>("index_constituents", { indexId }),
   parquetPreview: (args: ParquetPreviewArgs) => invoke<PreviewResult>("parquet_preview", { args }),
