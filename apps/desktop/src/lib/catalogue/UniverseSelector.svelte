@@ -9,6 +9,8 @@
   import { onMount } from "svelte";
   import { Tags, Layers, Loader2, Star } from "lucide-svelte";
   import SymbolChips from "$lib/composer/SymbolChips.svelte";
+  import BetaTag from "$lib/feedback/BetaTag.svelte";
+  import IndexPresetNotice from "$lib/catalogue/IndexPresetNotice.svelte";
   import { api, TAURI_AVAILABLE } from "$lib/api";
   import { app, log, navigate } from "$lib/stores/app.svelte";
   import type { AssetClass } from "$lib/stores/app.svelte";
@@ -112,10 +114,10 @@
     if (mode === "preset") loadPresets();
   });
 
-  const MODES: { id: Mode; label: string; icon: typeof Tags; description: string }[] = [
+  const MODES: { id: Mode; label: string; icon: typeof Tags; description: string; beta?: boolean }[] = [
     { id: "symbols",   label: "Symbols",       icon: Tags,   description: "One or many, with autocomplete" },
     { id: "watchlist", label: "Watchlist",     icon: Star,   description: "A list saved in Settings" },
-    { id: "preset",    label: "Index preset",  icon: Layers, description: "S&P 500, Nasdaq-100, etc." },
+    { id: "preset",    label: "Index preset",  icon: Layers, description: "S&P 500, Nasdaq-100, etc.", beta: true },
   ];
 
   const countLabel = $derived(
@@ -139,7 +141,7 @@
         onclick={() => (mode = m.id)}
       >
         <Icon size={15} strokeWidth={1.75} />
-        <span class="mode-label">{m.label}</span>
+        <span class="mode-label">{m.label}{#if m.beta}<BetaTag />{/if}</span>
         <span class="mode-desc">{m.description}</span>
       </button>
     {/each}
@@ -182,6 +184,7 @@
         </p>
       {:else}
         <div class="preset-picker">
+          <IndexPresetNotice />
           <select
             class="field-input"
             bind:value={selectedPresetId}
@@ -274,6 +277,9 @@
   }
 
   .mode-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     font-size: var(--text-body-sm);
     font-weight: var(--weight-semi);
     color: inherit;
