@@ -51,6 +51,15 @@ kept here that could drift.
 
 ![Flat files](docs/screenshots/flatfiles.png)
 
+**Index presets** (beta) fill the symbol step with a whole index — S&P
+500, S&P 400, S&P 600, Nasdaq-100, Dow or Russell 2000 — from
+[indexkit](https://github.com/kovagent/indexkit). The list is today's
+membership, so a past date range gets today's members for every day:
+names that joined or left since are wrong for those dates. indexkit's
+historical membership is daily for the S&P 500 only and quarterly or
+monthly for the rest, and the app flags presets as beta until it can use
+it.
+
 **Queue** is what happens after you press the button. Work is split into
 tasks, run against an account-wide concurrency budget, and each row
 carries its window, its row count and its size. Select with checkboxes

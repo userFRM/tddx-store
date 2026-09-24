@@ -8,6 +8,8 @@
   import { X, Loader2, Layers, ChevronRight } from "lucide-svelte";
   import { app, closeIndexPreset, log, refreshQueueSnapshot } from "$lib/stores/app.svelte";
   import { api, TAURI_AVAILABLE } from "$lib/api";
+  import BetaTag from "$lib/feedback/BetaTag.svelte";
+  import IndexPresetNotice from "$lib/catalogue/IndexPresetNotice.svelte";
 
   let symbols = $state<string[]>([]);
   let loadingSymbols = $state(false);
@@ -100,13 +102,15 @@
       <header class="head">
         <div>
           <span class="text-caption">Bulk queue · index ecosystem</span>
-          <h2 class="title"><Layers size={18} /> {app.presetSelected.name}</h2>
+          <h2 class="title"><Layers size={18} /> {app.presetSelected.name} <BetaTag /></h2>
           <p class="sub fg-muted">{app.presetSelected.description}</p>
         </div>
         <button class="btn-icon" onclick={closeIndexPreset} aria-label="Close">
           <X size={14} />
         </button>
       </header>
+
+      <div class="beta-notice"><IndexPresetNotice /></div>
 
       <div class="resolved">
         {#if loadingSymbols}
@@ -209,6 +213,7 @@
     margin: 0;
   }
   .sub { font-size: var(--text-body-sm); margin: 4px 0 0; }
+  .beta-notice { padding: var(--sp-3) var(--sp-5) 0; }
   .resolved {
     display: inline-flex;
     align-items: center;
