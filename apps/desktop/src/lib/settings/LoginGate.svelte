@@ -1,9 +1,10 @@
 <script lang="ts">
   /**
    * Full-screen login overlay shown until the user is `connected`.
-   * Reads/writes saved credentials via the backend (memory + opt-in
-   * persisted JSON next to the queue DB). The overlay disappears as
-   * soon as `app.connState === "connected"`.
+   * A credential saved on this device (encrypted Stronghold vault, opt-in
+   * via "Remember me") prefills the form; signing in is always the
+   * user's click. The overlay disappears as soon as
+   * `app.connState === "connected"`.
    */
   import { onMount } from "svelte";
   import {
@@ -26,7 +27,7 @@
   } from "$lib/stores/app.svelte";
   import ThetaDataLogo from "$lib/brand/ThetaDataLogo.svelte";
   import { api, TAURI_AVAILABLE } from "$lib/api";
-  import { vault } from "$lib/persistence/vault";
+  import { vault, type StoredCredential } from "$lib/persistence/vault";
 
   /** ThetaData accepts either credential. A key is revocable from the
    *  account portal without changing the password, so it is the better
@@ -49,34 +50,80 @@
     method === "password" ? Boolean(email && password) : Boolean(apiKey),
   );
 
-  onMount(async () => {
-    await loadSettings();
-    // Try the encrypted vault first; fall back to in-memory settings,
-    // which are only populated when the user just typed them and the
-    // vault write had not landed yet.
-    const stored = await vault.load().catch(() => null);
-    if (stored?.apiKey) {
-      method = "api_key";
-      apiKey = stored.apiKey;
-      keyEmail = stored.email ?? "";
-      remember = true;
-      await trySignIn(/* fromAuto */ true);
-    } else if (stored?.email && stored.password) {
-      email = stored.email;
-      password = stored.password;
-      remember = true;
-      await trySignIn(true);
-    } else if (app.settings.email && app.settings.password) {
-      email = app.settings.email;
-      password = app.settings.password;
-      remember = true;
-      await trySignIn(true);
-    } else if (app.settings.email) {
-      email = app.settings.email;
+  /** The credential saved on this device, if any. It fills the form
+   *  rather than signing in on its own: a launch that connects before
+   *  the user has done anything is indistinguishable from someone
+   *  else's session, and the user should see which account is used. */
+  let saved = $state<StoredCredential | null>(null);
+
+  /** Last four characters, enough to tell two keys apart. */
+  const savedLabel = $derived.by(() => {
+    if (!saved) return "";
+    if (saved.apiKey) {
+      const tail = saved.apiKey.slice(-4);
+      return `API key ••••${tail}${saved.email ? ` · ${saved.email}` : ""}`;
     }
+    return saved.email ?? "";
   });
 
-  async function trySignIn(fromAuto = false) {
+  async function loadSaved() {
+    saved = await vault.load().catch(() => null);
+    if (saved?.apiKey) {
+      method = "api_key";
+      apiKey = saved.apiKey;
+      keyEmail = saved.email ?? "";
+    } else if (saved?.password) {
+      method = "password";
+      email = saved.email ?? "";
+      password = saved.password;
+    }
+  }
+
+  /** Shown inside the gate: toasts render beneath this overlay, so an
+   *  error sent there would never be seen. */
+  let forgetError = $state("");
+
+  async function forgetSaved() {
+    // Clear the form first so the click visibly does something, then
+    // remove it from disk.
+    saved = null;
+    apiKey = "";
+    keyEmail = "";
+    email = "";
+    password = "";
+    forgetError = "";
+    try {
+      await vault.clear();
+      log("info", "Saved credential removed from this device");
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      forgetError = `Couldn't remove the saved credential: ${msg}`;
+      log("warn", forgetError);
+    }
+  }
+
+  onMount(async () => {
+    await loadSettings();
+    await loadSaved();
+  });
+
+  // Coming back to the gate after "Sign out": the vault was just
+  // cleared, so start from an empty form instead of the secret that was
+  // in it a moment ago.
+  let wasConnected = false;
+  $effect(() => {
+    const connected = app.connState === "connected";
+    if (wasConnected && app.connState === "idle") {
+      saved = null;
+      apiKey = "";
+      keyEmail = "";
+      email = "";
+      password = "";
+    }
+    wasConnected = connected;
+  });
+
+  async function trySignIn() {
     if (!ready) {
       app.connState = "error";
       app.connMsg =
@@ -85,7 +132,7 @@
     }
     signingIn = true;
     app.connState = "connecting";
-    app.connMsg = fromAuto ? "Auto-signing in…" : "Signing in…";
+    app.connMsg = "Signing in…";
     try {
       if (method === "password") {
         app.settings.email = email;
@@ -148,6 +195,17 @@
       <p class="gate-sub">Streams market data using your ThetaData account.</p>
 
       <form class="gate-form" onsubmit={onSubmit}>
+        {#if saved}
+          <div class="saved-row">
+            <KeyRound size={14} />
+            <span class="saved-text">
+              Saved on this device: <strong class="text-figures">{savedLabel}</strong>
+            </span>
+            <button type="button" class="link-btn" onclick={forgetSaved} disabled={signingIn}>
+              Forget
+            </button>
+          </div>
+        {/if}
         <div class="method-switch" role="radiogroup" aria-label="Sign-in method">
           <button
             type="button"
@@ -259,6 +317,13 @@
           <input type="checkbox" bind:checked={remember} disabled={signingIn} />
           <span class="text-body-sm">Remember me on this device</span>
         </label>
+
+        {#if forgetError}
+          <div class="gate-error">
+            <AlertCircle size={14} />
+            <span>{forgetError}</span>
+          </div>
+        {/if}
 
         {#if app.connState === "error"}
           <div class="gate-error">
@@ -396,6 +461,28 @@
   }
   .trailing-btn:hover { color: var(--fg); }
 
+  .saved-row {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: 8px 10px;
+    border: 1px solid var(--accent-tint-strong);
+    border-radius: var(--r-md);
+    background: linear-gradient(135deg, var(--accent-tint), var(--accent-tint-weak) 60%, transparent);
+    color: var(--accent);
+    font-size: var(--text-body-sm);
+  }
+  .saved-text { flex: 1; min-width: 0; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .saved-text strong { font-weight: var(--weight-semi); }
+  .link-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--accent);
+    cursor: pointer;
+    font: inherit;
+    text-decoration: underline;
+  }
   .remember {
     display: flex;
     align-items: center;

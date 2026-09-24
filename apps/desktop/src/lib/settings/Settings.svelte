@@ -18,7 +18,7 @@
     Lock,
     ArrowUpRight,
   } from "lucide-svelte";
-  import { app, startQueuePoll, stopQueuePoll, loadSettings } from "$lib/stores/app.svelte";
+  import { app, startQueuePoll, stopQueuePoll, loadSettings, log, navigate } from "$lib/stores/app.svelte";
   import { api } from "$lib/api";
   import { vault } from "$lib/persistence/vault";
   import { openUrl } from "@tauri-apps/plugin-opener";
@@ -82,22 +82,41 @@
   }
 
   async function signOut() {
-    // Backend tear-down first: drops the live `Client`, aborts the
-    // worker pool, and clears in-memory credentials. Without this the
-    // FE flips to "idle" but the Rust session keeps running — next
-    // tier_status / endpoint_invoke still succeeds against the live
-    // ThetaData session, which is exactly the "sign out does nothing"
-    // bug from the field.
-    await api.logout().catch(() => {});
-    await vault.clear().catch(() => {});
+    // The UI answers the click at once: the sign-in screen comes up
+    // before the teardown, which opens and re-encrypts the vault and
+    // can take seconds. Waiting on it first is what made the button
+    // look dead.
+    stopQueuePoll();
+    // The next sign-in starts a fresh session, so it opens on Home
+    // rather than the Settings page the previous one ended on.
+    navigate("home");
+    app.connState = "idle";
+    app.connMsg = "";
+    app.tierStatus = null;
     app.settings.email = "";
     app.settings.password = "";
     email = "";
     password = "";
-    app.connState = "idle";
-    app.connMsg = "";
-    app.tierStatus = null;
-    stopQueuePoll();
+
+    // Then the backend: drops the live client, aborts the worker pool,
+    // clears in-memory credentials, and removes the saved credential so
+    // the next launch doesn't sign straight back in.
+    try {
+      await api.logout();
+    } catch (e: unknown) {
+      log("error", `Sign-out: backend teardown failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    try {
+      await vault.clear();
+      log("info", "Signed out; saved credential removed");
+    } catch (e: unknown) {
+      // Said on the sign-in screen, which is what is showing now; a toast
+      // would sit underneath it.
+      const msg = `Signed out, but couldn't remove the saved credential: ${e instanceof Error ? e.message : String(e)}`;
+      app.connState = "error";
+      app.connMsg = msg;
+      log("warn", msg);
+    }
   }
 
   async function saveStorage() {
