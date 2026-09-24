@@ -65,7 +65,10 @@ pub async fn settings_set(
     // queue on the old file, so the user saw "Saved" while every
     // subsequent enqueue still wrote to the database they had just
     // moved away from.
-    let previous_db = state.settings.read().await.db_path.clone();
+    let (previous_db, previous_out) = {
+        let s = state.settings.read().await;
+        (s.db_path.clone(), s.output_dir.clone())
+    };
     let db_changed = previous_db != settings.db_path && !settings.db_path.is_empty();
 
     if db_changed && workers_running(&state).await {
@@ -104,7 +107,15 @@ pub async fn settings_set(
     settings.email = std::mem::take(&mut current.email);
     settings.password = std::mem::take(&mut current.password);
     settings.api_key = std::mem::take(&mut current.api_key);
+    let new_out = settings.output_dir.clone();
     *current = settings;
+    drop(current);
+    // The Library follows the directory it shows.
+    if new_out != previous_out {
+        crate::events::watch_output_dir(state.inner(), &new_out);
+        *state.disk_usage.lock().await = None;
+        state.notify(crate::events::LIBRARY_CHANGED);
+    }
     Ok(())
 }
 

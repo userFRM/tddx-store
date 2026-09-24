@@ -11,6 +11,7 @@ use std::sync::Arc;
 use tauri::Manager;
 
 mod commands;
+mod events;
 mod secrets;
 mod state;
 
@@ -150,6 +151,13 @@ pub fn run() {
                     s.creds_path = data_dir.join("creds.txt").to_string_lossy().into();
                 }
             });
+
+            // Announce changes to the webview, and watch the library for
+            // edits made outside the app.
+            let _ = app_state.app.set(app.handle().clone());
+            let output_dir =
+                tauri::async_runtime::block_on(async { app_state.settings.read().await.output_dir.clone() });
+            events::watch_output_dir(app_state.inner(), &output_dir);
 
             // Fire recurring downloads. The ticker no-ops until the user
             // connects and the queue is open.

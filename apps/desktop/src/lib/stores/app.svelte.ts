@@ -168,6 +168,10 @@ interface AppState {
    *  one place. */
   coverage: Coverage[];
   coverageLoading: boolean;
+  /** Bumped whenever files under the output directory change, from the
+   *  app or from outside it. Views holding their own file listings
+   *  re-read when it moves. */
+  libraryRev: number;
   /** Downloads as the user asked for them, newest first. */
   batches: Batch[];
   /** Measured transfer rate. See `recordTransfer`. */
@@ -262,6 +266,7 @@ export const app = $state<AppState>({
   browseIntent: null,
   coverage: [],
   coverageLoading: false,
+  libraryRev: 0,
   batches: [],
   transfer: { bytesPerSec: 0, history: [] },
   sessionLost: null,
@@ -461,7 +466,7 @@ export function activityReport(): string {
 // The Tauri backend emits `tdds:progress` events as workers go
 // through Started → Done/Empty/Failed transitions. We listen once on
 // app start and update the runtime task counter so the UI reacts in
-// real time instead of waiting for the 1.5 s SQLite poll.
+// real time.
 
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
@@ -491,9 +496,8 @@ export async function startProgressListener() {
     const { listen } = await import("@tauri-apps/api/event");
     _progressUnlisten = await listen<WorkerEvent>("tdds:progress", (e) => {
       const ev = e.payload;
-      // Track in-flight set so the UI can show "running tasks" without
-      // waiting on the 1.5 s SQL poll. Recent events also push into the
-      // activity log so the console feels live.
+      // Track the in-flight set so the UI can show running tasks and
+      // live throughput straight from the workers.
       if (ev.type === "session_lost") {
         app.sessionLost = ev.message;
         app.runningTaskIds = [];
@@ -514,13 +518,32 @@ export async function startProgressListener() {
         if (ev.type === "done") recordTransfer(ev.bytes, ev.millis);
         else _updateRate();
       }
-      // Trigger an immediate poll so the UI snapshot picks up the new
-      // SQLite state without waiting for the next tick.
-      void _pollOnce();
+      // The queue row changed state; show it.
+      requestSnapshot();
     });
+    // Everything else that changes arrives as a plain "re-read this".
+    _changeUnlisten = await Promise.all([
+      listen("tdds:queue-changed", () => requestSnapshot()),
+      listen("tdds:library-changed", () => _onLibraryChanged()),
+    ]);
   } catch (e) {
     log("warn", `progress listener failed: ${e instanceof Error ? e.message : String(e)}`);
   }
+}
+
+let _changeUnlisten: UnlistenFn[] = [];
+
+/** Files under the output directory changed: a download landed, the
+ *  Library deleted something, or someone edited the folder in Finder.
+ *  Coverage is re-read only once something has shown it; a view that
+ *  mounts later loads it fresh anyway. */
+function _onLibraryChanged() {
+  app.libraryRev += 1;
+  if (app.coverage.length > 0 || app.currentView === "home" || app.currentView === "library") {
+    void loadCoverage(true);
+  }
+  // The footprint in the snapshot moved too.
+  requestSnapshot();
 }
 
 export function stopProgressListener() {
@@ -528,6 +551,8 @@ export function stopProgressListener() {
     _progressUnlisten();
     _progressUnlisten = null;
   }
+  for (const un of _changeUnlisten) un();
+  _changeUnlisten = [];
 }
 
 // ── Warm caches on connect ───────────────────────────────────
@@ -646,43 +671,44 @@ export function openDetail(d: DatasetMeta) {
   app.currentView = "detail";
 }
 
-// ── Queue polling ────────────────────────────────────────────
+// ── Live queue state ─────────────────────────────────────────
 //
-// Adaptive, because a fixed 1.5s poll of a 500-row snapshot plus a
-// disk walk is real work to do forever in an app that is idle almost
-// all of the time. Three rates:
+// Event-driven. The backend announces every change — worker progress,
+// commands that edit the queue, schedule fires, files on disk — and
+// each announcement asks for one fresh snapshot. Bursts collapse: while
+// a snapshot is in flight, any number of further requests become one
+// follow-up read, so queueing 500 symbols costs two reads, not 500.
 //
-//   ACTIVE  something is running or pending — the user is watching
-//           progress bars, so stay responsive
-//   IDLE    queue is drained; poll only to notice work arriving from
-//           a schedule tick or a second window
-//   HIDDEN  window is not on screen; nobody can see the result
-//
-// Self-scheduling `setTimeout` rather than `setInterval` so the rate
-// can change between ticks, and so a slow snapshot cannot stack up
-// overlapping calls the way a fixed interval can.
-const POLL_ACTIVE_MS = 1500;
-const POLL_IDLE_MS = 8000;
-const POLL_HIDDEN_MS = 30000;
+// One slow check remains while the window is visible, as a backstop
+// for a change that arrives without an event (another process writing
+// the database). A hidden window does nothing, and coming back to it
+// reads once straight away.
+const BACKSTOP_MS = 60_000;
 
-let _pollTimer: ReturnType<typeof setTimeout> | null = null;
-let _pollRunning = false;
+let _live = false;
+let _backstop: ReturnType<typeof setInterval> | null = null;
+let _inFlight = false;
+let _again = false;
 
+/** Start following the queue. Idempotent; call after sign-in. */
 export function startQueuePoll() {
-  if (_pollRunning) return;
-  _pollRunning = true;
+  if (_live) return;
+  _live = true;
   app.queuePollActive = true;
   if (typeof document !== "undefined") {
     document.addEventListener("visibilitychange", _onVisibility);
   }
-  void _pollLoop();
+  requestSnapshot();
+  _backstop = setInterval(() => {
+    if (typeof document === "undefined" || document.visibilityState === "visible") requestSnapshot();
+  }, BACKSTOP_MS);
 }
 
 export function stopQueuePoll() {
-  _pollRunning = false;
-  if (_pollTimer !== null) {
-    clearTimeout(_pollTimer);
-    _pollTimer = null;
+  _live = false;
+  if (_backstop !== null) {
+    clearInterval(_backstop);
+    _backstop = null;
   }
   if (typeof document !== "undefined") {
     document.removeEventListener("visibilitychange", _onVisibility);
@@ -690,26 +716,25 @@ export function stopQueuePoll() {
   app.queuePollActive = false;
 }
 
-/** Coming back to the window should show current state immediately,
- *  not up to `POLL_HIDDEN_MS` later. */
 function _onVisibility() {
-  if (!_pollRunning || document.visibilityState !== "visible") return;
-  if (_pollTimer !== null) clearTimeout(_pollTimer);
-  void _pollLoop();
+  if (_live && document.visibilityState === "visible") requestSnapshot();
 }
 
-async function _pollLoop() {
-  if (!_pollRunning) return;
-  await _pollOnce();
-  if (!_pollRunning) return;
-  _pollTimer = setTimeout(() => void _pollLoop(), _pollDelay());
-}
-
-function _pollDelay(): number {
-  if (typeof document !== "undefined" && document.visibilityState === "hidden") {
-    return POLL_HIDDEN_MS;
+/** Read the queue once, soon. Safe to call as often as anything likes. */
+export function requestSnapshot() {
+  if (!_live) return;
+  if (_inFlight) {
+    _again = true;
+    return;
   }
-  return _queueBusy() ? POLL_ACTIVE_MS : POLL_IDLE_MS;
+  _inFlight = true;
+  void _pollOnce().finally(() => {
+    _inFlight = false;
+    if (_again) {
+      _again = false;
+      requestSnapshot();
+    }
+  });
 }
 
 function _queueBusy(): boolean {
@@ -796,14 +821,10 @@ async function _pollOnce() {
       .then((b) => (app.batches = b))
       .catch(() => {});
     const snap = await api.snapshot();
-    const finishedBefore = _finishedCount(app.queueSnap);
     const wasBusy = _busy(app.queueSnap);
     app.queueSnap = snap;
-    // A task that just finished changed what is on disk. Coverage was
-    // fetched once per view on mount, so until this the Library and the
-    // Home dashboard kept showing pre-download numbers until the user
-    // navigated away and back.
-    if (_finishedCount(snap) > finishedBefore) void loadCoverage(true);
+    // What a finished task wrote reaches coverage through the library
+    // watcher (`tdds:library-changed`), not from here.
 
     // The in-flight set is built from worker events, so a task that
     // vanished without one — removed mid-request, or orphaned by a
@@ -853,19 +874,17 @@ function _announceRun(snap: QueueSnapshot) {
   }
 }
 
-function _finishedCount(snap: QueueSnapshot | null): number {
-  if (!snap) return 0;
-  return snap.counts
-    .filter(([status]) => status === "done" || status === "empty" || status === "failed")
-    .reduce((sum, [, n]) => sum + n, 0);
-}
-
 /** Refresh what is on disk. `force` re-fetches even when a copy is
  *  already held; without it the call is a no-op once loaded, which is
  *  what view mounts want. */
 export async function loadCoverage(force = false) {
-  if (app.coverageLoading) return;
   if (!force && app.coverage.length > 0) return;
+  // A change during a read would be missed by that read; remember it
+  // and read once more after, rather than dropping it.
+  if (app.coverageLoading) {
+    _coverageAgain = true;
+    return;
+  }
   app.coverageLoading = true;
   try {
     app.coverage = await api.coverage();
@@ -874,7 +893,12 @@ export async function loadCoverage(force = false) {
   } finally {
     app.coverageLoading = false;
   }
+  if (_coverageAgain) {
+    _coverageAgain = false;
+    await loadCoverage(true);
+  }
 }
+let _coverageAgain = false;
 
 /** Pull a fresh snapshot now. Row actions call this so the list reflects
  *  the change on the click rather than up to a poll interval later. */

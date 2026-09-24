@@ -25,9 +25,9 @@
 
   // ── Throughput ───────────────────────────────────────────────
   // Measured from completed transfers in the store (`app.transfer`),
-  // not diffed from `bytes_on_disk`: that figure is refreshed at most
-  // every 15 s because it costs a walk of the output tree, so the old
-  // rate read 0 B/s between refreshes and spiked when one landed.
+  // not diffed from `bytes_on_disk`: that figure comes from a walk of the
+  // output tree read only when files change, so a rate derived from it
+  // would jump in steps rather than follow the transfers.
   const bytesPerSec = $derived(app.transfer.bytesPerSec);
 
   /** Sparkline path for the last minute of transfer rate. */

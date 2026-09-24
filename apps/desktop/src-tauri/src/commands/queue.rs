@@ -14,6 +14,7 @@ use tdds_core::{
     ProgressEvent, Queue,
 };
 
+use crate::events;
 use crate::state::{parse_ymd, AppState, DiskUsage, QueueSnapshot, TaskView};
 
 #[derive(Deserialize)]
@@ -225,6 +226,7 @@ pub async fn enqueue(state: State<'_, Arc<AppState>>, args: EnqueueArgs) -> Resu
                 .map_err(|e| e.to_string())?;
         }
     }
+    state.notify(events::QUEUE_CHANGED);
     Ok(plan.requests)
 }
 
@@ -245,11 +247,13 @@ fn is_wildcard(v: &str) -> bool {
 /// rather than the queue.
 const SNAPSHOT_ROWS: i64 = 500;
 
-/// How long a disk-footprint reading stays fresh.
+/// How long a disk-footprint reading stays fresh. The library watcher
+/// clears it on any change, so this only bounds how often a burst of
+/// reads during a download walks the tree.
 const DISK_USAGE_TTL: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// On-disk footprint, walked at most once per [`DISK_USAGE_TTL`].
-async fn disk_usage(state: &AppState, output_dir: &str) -> Result<DiskUsage, String> {
+pub(crate) async fn disk_usage(state: &AppState, output_dir: &str) -> Result<DiskUsage, String> {
     {
         let cached = state.disk_usage.lock().await;
         if let Some((taken, usage)) = cached.as_ref() {
@@ -319,9 +323,8 @@ pub async fn run_queue(
     let tiers = client.user_tiers();
     // Wire a progress channel: Pool emits Started/Done/Empty/Failed
     // events as workers tick; we forward each to the webview as a
-    // tauri event so the UI can update without waiting for the 1.5 s
-    // SQLite poll. Bounded mpsc keeps backpressure if the renderer
-    // stalls.
+    // tauri event so the UI updates as it happens. Bounded mpsc keeps
+    // backpressure if the renderer stalls.
     let (tx, mut rx) = tokio::sync::mpsc::channel::<ProgressEvent>(1024);
     let app_for_events = app.clone();
     tokio::spawn(async move {
@@ -367,29 +370,32 @@ const BATCH_ROWS: i64 = 200;
 
 #[tauri::command]
 pub async fn pause_batch(state: State<'_, Arc<AppState>>, id: String) -> Result<u64, String> {
-    queue_of(&state)
+    let r = queue_of(&state)
         .await?
         .pause_batch(&id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string());
+    state.notify_ok(events::QUEUE_CHANGED, r)
 }
 
 #[tauri::command]
 pub async fn resume_batch(state: State<'_, Arc<AppState>>, id: String) -> Result<u64, String> {
-    queue_of(&state)
+    let r = queue_of(&state)
         .await?
         .resume_batch(&id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string());
+    state.notify_ok(events::QUEUE_CHANGED, r)
 }
 
 #[tauri::command]
 pub async fn remove_batch(state: State<'_, Arc<AppState>>, id: String) -> Result<u64, String> {
-    queue_of(&state)
+    let r = queue_of(&state)
         .await?
         .remove_batch(&id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string());
+    state.notify_ok(events::QUEUE_CHANGED, r)
 }
 
 /// True iff a worker pool task is in flight.
@@ -415,7 +421,8 @@ pub async fn cancel_tasks(
     ids: Vec<String>,
 ) -> Result<u64, String> {
     let queue = queue_of(&state).await?;
-    queue.cancel_many(&ids).await.map_err(|e| e.to_string())
+    let r = queue.cancel_many(&ids).await.map_err(|e| e.to_string());
+    state.notify_ok(events::QUEUE_CHANGED, r)
 }
 
 /// Put tasks back to pending, whatever their current status.
@@ -425,7 +432,8 @@ pub async fn requeue_tasks(
     ids: Vec<String>,
 ) -> Result<u64, String> {
     let queue = queue_of(&state).await?;
-    queue.requeue_many(&ids).await.map_err(|e| e.to_string())
+    let r = queue.requeue_many(&ids).await.map_err(|e| e.to_string());
+    state.notify_ok(events::QUEUE_CHANGED, r)
 }
 
 /// Delete tasks from the queue, whatever their status. A running task's
@@ -437,7 +445,8 @@ pub async fn remove_tasks(
     ids: Vec<String>,
 ) -> Result<u64, String> {
     let queue = queue_of(&state).await?;
-    queue.remove_many(&ids).await.map_err(|e| e.to_string())
+    let r = queue.remove_many(&ids).await.map_err(|e| e.to_string());
+    state.notify_ok(events::QUEUE_CHANGED, r)
 }
 
 /// Delete every finished row, or every row in one finished status.
@@ -452,10 +461,11 @@ pub async fn clear_tasks(
         None | Some("") | Some("all") => None,
         Some(s) => Some(TaskStatus::parse(s).ok_or_else(|| format!("unknown status {s}"))?),
     };
-    queue
+    let r = queue
         .clear_finished(status)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string());
+    state.notify_ok(events::QUEUE_CHANGED, r)
 }
 
 /// Move pending tasks to the front of the queue. Returns how many moved;
@@ -472,6 +482,7 @@ pub async fn bump_tasks(
             moved += 1;
         }
     }
+    state.notify(events::QUEUE_CHANGED);
     Ok(moved)
 }
 
@@ -488,6 +499,7 @@ pub async fn duplicate_tasks(
         queue.duplicate(id).await.map_err(|e| e.to_string())?;
         made += 1;
     }
+    state.notify(events::QUEUE_CHANGED);
     Ok(made)
 }
 
@@ -503,5 +515,6 @@ pub async fn requeue_failed(state: State<'_, Arc<AppState>>) -> Result<usize, St
     for t in &failed {
         queue.requeue(&t.id).await.map_err(|e| e.to_string())?;
     }
+    state.notify(events::QUEUE_CHANGED);
     Ok(failed.len())
 }

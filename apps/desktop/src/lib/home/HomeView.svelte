@@ -30,8 +30,8 @@
   const coverage = $derived(app.coverage);
   const coverageLoading = $derived(app.coverageLoading);
 
-  // Shared with the Library view and invalidated by the queue poll when
-  // a task finishes, so this card does not keep showing pre-download
+  // Shared with the Library view and refreshed whenever the output
+  // directory changes, so this card does not keep showing pre-download
   // numbers. Connecting mid-session triggers the same load.
   $effect(() => {
     if (app.connState === "connected") void loadCoverage();
