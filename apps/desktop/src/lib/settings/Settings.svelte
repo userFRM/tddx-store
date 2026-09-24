@@ -110,7 +110,12 @@
       await vault.clear();
       log("info", "Signed out; saved credential removed");
     } catch (e: unknown) {
-      log("error", `Sign-out: couldn't remove the saved credential: ${e instanceof Error ? e.message : String(e)}`);
+      // Said on the sign-in screen, which is what is showing now; a toast
+      // would sit underneath it.
+      const msg = `Signed out, but couldn't remove the saved credential: ${e instanceof Error ? e.message : String(e)}`;
+      app.connState = "error";
+      app.connMsg = msg;
+      log("warn", msg);
     }
   }
 

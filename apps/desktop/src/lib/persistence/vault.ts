@@ -136,8 +136,26 @@ const raw = {
 // One operation at a time. The sign-in path saves without awaiting, so
 // a sign-out right after could interleave with that save and leave the
 // credential it just removed back on disk.
+// Each one is bounded too: with a queue, one Stronghold call that never
+// settles would stall every later one, and Forget and Sign out with it.
+const VAULT_TIMEOUT_MS = 10_000;
+function bounded<T>(fn: () => Promise<T>): () => Promise<T> {
+  return () =>
+    new Promise<T>((resolve, reject) => {
+      const t = setTimeout(
+        () => reject(new Error(`the credential vault didn't respond within ${VAULT_TIMEOUT_MS / 1000} s`)),
+        VAULT_TIMEOUT_MS,
+      );
+      fn().then(
+        (v) => { clearTimeout(t); resolve(v); },
+        (e) => { clearTimeout(t); reject(e); },
+      );
+    });
+}
+
 let _tail: Promise<unknown> = Promise.resolve();
-function serial<T>(fn: () => Promise<T>): Promise<T> {
+function serial<T>(op: () => Promise<T>): Promise<T> {
+  const fn = bounded(op);
   const run = _tail.then(fn, fn);
   _tail = run.catch(() => {});
   return run;

@@ -14,6 +14,10 @@ use tdds_core::{schedule, Client, Queue};
 
 use crate::state::AppState;
 
+/// How long sign-in may take before the UI is told it failed. A normal
+/// sign-in takes about two seconds.
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 #[tauri::command]
 pub async fn connect(state: State<'_, Arc<AppState>>) -> Result<String, String> {
     // Snapshot settings under a short read lock — never held across an
@@ -33,20 +37,28 @@ pub async fn connect(state: State<'_, Arc<AppState>>) -> Result<String, String> 
         .map_err(|e| e.to_string())?;
     // An API key entered this session wins, then email + password, then
     // whatever `THETADATA_API_KEY` or the creds file supplies.
-    let client = if !cfg.api_key.is_empty() {
-        let email = (!cfg.email.is_empty()).then_some(cfg.email.as_str());
-        Client::connect_with_api_key(&cfg.api_key, email)
-            .await
-            .map_err(|e| e.to_string())?
-    } else if !cfg.email.is_empty() && !cfg.password.is_empty() {
-        Client::connect_with_credentials(&cfg.email, &cfg.password)
-            .await
-            .map_err(|e| e.to_string())?
-    } else {
-        Client::connect(Some(&PathBuf::from(&cfg.creds_path)))
-            .await
-            .map_err(|e| e.to_string())?
+    // The SDK's sign-in has no deadline of its own: a stalled auth or
+    // channel handshake left the sign-in screen spinning forever with
+    // nothing in the log after "authenticating". Bound it and say so.
+    let connecting = async {
+        if !cfg.api_key.is_empty() {
+            let email = (!cfg.email.is_empty()).then_some(cfg.email.as_str());
+            Client::connect_with_api_key(&cfg.api_key, email).await
+        } else if !cfg.email.is_empty() && !cfg.password.is_empty() {
+            Client::connect_with_credentials(&cfg.email, &cfg.password).await
+        } else {
+            Client::connect(Some(&PathBuf::from(&cfg.creds_path))).await
+        }
     };
+    let client = tokio::time::timeout(CONNECT_TIMEOUT, connecting)
+        .await
+        .map_err(|_| {
+            format!(
+                "ThetaData didn't answer within {} s. Check the connection and try again.",
+                CONNECT_TIMEOUT.as_secs()
+            )
+        })?
+        .map_err(|e| e.to_string())?;
     // Reap any tasks left in `running` state by a previous unclean
     // shutdown (the rust runtime aborted mid-task; they got stuck in
     // SQLite). New pool runs will not pick them up again unless reset

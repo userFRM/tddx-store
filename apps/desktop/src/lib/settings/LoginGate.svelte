@@ -79,19 +79,27 @@
     }
   }
 
+  /** Shown inside the gate: toasts render beneath this overlay, so an
+   *  error sent there would never be seen. */
+  let forgetError = $state("");
+
   async function forgetSaved() {
-    try {
-      await vault.clear();
-      log("info", "Saved credential removed from this device");
-    } catch (e: unknown) {
-      log("error", `Couldn't remove the saved credential: ${e instanceof Error ? e.message : String(e)}`);
-      return;
-    }
+    // Clear the form first so the click visibly does something, then
+    // remove it from disk.
     saved = null;
     apiKey = "";
     keyEmail = "";
     email = "";
     password = "";
+    forgetError = "";
+    try {
+      await vault.clear();
+      log("info", "Saved credential removed from this device");
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      forgetError = `Couldn't remove the saved credential: ${msg}`;
+      log("warn", forgetError);
+    }
   }
 
   onMount(async () => {
@@ -309,6 +317,13 @@
           <input type="checkbox" bind:checked={remember} disabled={signingIn} />
           <span class="text-body-sm">Remember me on this device</span>
         </label>
+
+        {#if forgetError}
+          <div class="gate-error">
+            <AlertCircle size={14} />
+            <span>{forgetError}</span>
+          </div>
+        {/if}
 
         {#if app.connState === "error"}
           <div class="gate-error">
